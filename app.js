@@ -1,4 +1,6 @@
 import { EEGBuffer, Calibrator, extractEpoch, scoreEpoch, EPOCH_POST_MS } from './p300.js';
+import { startCvIngest, stopCvIngest, notifyEegHit, resetDetector } from './cv_ingest.js';
+import { startInsightsPoll, stopInsightsPoll } from './insights.js';
 
 // ─── State ───────────────────────────────────────────────────────────────────
 const state = {
@@ -85,8 +87,33 @@ function initDroneFeed(url) {
   video.src = url;
   video.play().catch(() => {});
   document.getElementById('no-feed').style.display = 'none';
-  video.style.display = 'block';
+  document.getElementById('rsvp-container').classList.add('show-video');
   log(`Drone feed: ${url}`);
+}
+
+async function captureScreenAsDroneFeed() {
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: 30 } },
+      audio: false,
+    });
+    const video = document.getElementById('drone-video');
+    video.removeAttribute('src');
+    video.srcObject = stream;
+    video.muted = true;
+    video.playsInline = true;
+    await video.play();
+    document.getElementById('no-feed').style.display = 'none';
+    document.getElementById('rsvp-container').classList.add('show-video');
+    state.droneUrl = 'screen-capture';
+    stream.getVideoTracks()[0].addEventListener('ended', () => {
+      log('Screen capture ended');
+      video.srcObject = null;
+    });
+    log('Screen capture active — pick the iPhone Mirroring window');
+  } catch (err) {
+    log(`Screen capture failed: ${err.message}`);
+  }
 }
 
 // Demo: sample from a static video element or canvas pattern
@@ -225,6 +252,7 @@ function analyzeFrame(stimulus) {
     renderFlaggedFrames();
     flashDetection();
     persistDetection(det);
+    notifyEegHit(det);
     log(`P300 detected — frame ${stimulus.frameId} (${result.amplitude}µV, score ${result.score.toFixed(2)})`);
   }
 }
@@ -438,6 +466,16 @@ function setMode(mode) {
   document.getElementById('btn-cal').disabled = mode === 'scanning' || mode === 'calibrating';
   document.getElementById('mode-label').textContent = mode.toUpperCase();
 
+  const container = document.getElementById('rsvp-container');
+  const hasVideo  = !!state.droneUrl;
+  if (mode === 'scanning' || mode === 'calibrating') {
+    container.classList.add('show-rsvp');
+    container.classList.remove('show-video');
+  } else {
+    container.classList.remove('show-rsvp');
+    if (hasVideo) container.classList.add('show-video');
+  }
+
   if (mode === 'scanning') startRSVP();
   if (mode === 'idle' || mode === 'paused') stopRSVP();
 }
@@ -501,6 +539,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('btn-scan').addEventListener('click', () => setMode('scanning'));
   document.getElementById('btn-pause').addEventListener('click', () => setMode('paused'));
+  document.getElementById('btn-capture-screen').addEventListener('click', captureScreenAsDroneFeed);
+
   document.getElementById('btn-reset').addEventListener('click', () => {
     state.flaggedFrames = [];
     state.frameId = 0;
@@ -538,6 +578,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
   setMode('idle');
   log('NeuroRSVP initialized — calibrate before scanning');
+
+  // ── CV + insights pipeline ─────────────────────────────────────────────────
+  startCvIngest({
+    getGps: () => state.latestTelemetry || null,
+    onFrame: (r) => {
+      const el = document.getElementById('cv-pulse');
+      if (!el) return;
+      el.classList.add('active');
+      setTimeout(() => el.classList.remove('active'), 250);
+      if (r && (r.persons_count > 0 || r.fire || r.smoke)) {
+        const parts = [];
+        if (r.persons_count) parts.push(`${r.persons_count} person`);
+        if (r.fire)  parts.push('fire');
+        if (r.smoke) parts.push('smoke');
+        document.getElementById('cv-last').textContent = parts.join(' · ');
+      }
+    },
+  });
+  startInsightsPoll();
+
+  document.getElementById('btn-report')?.addEventListener('click', () => {
+    window.downloadFlightReport?.();
+  });
+  document.getElementById('btn-reset')?.addEventListener('click', () => {
+    resetDetector();
+  });
 });
 
 // ─── Telemetry ────────────────────────────────────────────────────────────────

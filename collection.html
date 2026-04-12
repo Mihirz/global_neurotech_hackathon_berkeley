@@ -366,11 +366,10 @@
         <button id="btn-pause" disabled>Pause</button>
         <button class="danger" id="btn-reset">Reset Session</button>
         <button id="btn-save" disabled>Save to Server</button>
-        <button id="btn-train" disabled>Train Classifier</button>
         <button id="btn-json" disabled>Download JSON</button>
         <button id="btn-csv" disabled>Download CSV</button>
       </div>
-      <div class="status-note" id="training-status">Training waits for saved collection data.</div>
+      <div class="status-note" id="training-status">CV-led Muse mode: decisions follow the image diagnosis with live Muse bands/raw epoch features adding a small salience bias. Training is bypassed.</div>
     </section>
 
     <section>
@@ -387,7 +386,7 @@
       <label>Blank / EEG window (ms)
         <input id="blank-ms" type="number" min="500" max="3000" value="900">
       </label>
-      <label>P300 threshold (uV)
+      <label>Raw Muse marker threshold (uV)
         <input id="threshold-uv" type="number" min="0.5" max="20" step="0.1" value="3.0">
       </label>
       <p class="note">Trials use the PRD oddball mix: 20% humans in fire, 30% items in fire, 50% normal items.</p>
@@ -412,19 +411,19 @@
     <div class="progress">
       <div class="bar"><div id="progress-fill"></div></div>
       <div id="progress-text">No trials collected yet.</div>
-      <div id="current-meta">Each row will align image_id, label, stimulus timestamp, EEG response, and P300 features.</div>
+      <div id="current-meta">Each row aligns image_id, CV diagnosis, stimulus timestamp, live Muse stream features, and salience score.</div>
     </div>
   </main>
 
   <aside class="right">
     <section>
-      <h2>Live EEG</h2>
+      <h2>Live Muse EEG</h2>
       <canvas id="waveform" width="330" height="86"></canvas>
       <div class="band-grid" id="band-grid"></div>
     </section>
 
     <section>
-      <h2>Stats</h2>
+      <h2>CV + Muse Stats</h2>
       <div class="stats" id="stats-grid"></div>
     </section>
 

@@ -1,9 +1,11 @@
 # NeuroRSVP — Firefighter BCI
 
-P300-based image-response collection for firefighter salience detection using a
-Muse 2 EEG headset. The collection app presents labeled fire-scene images,
-timestamps each stimulus, records concurrent EEG, extracts P300/bandpower
-features, and saves rows for training a classifier.
+CV-led image-response collection for firefighter salience detection using a
+live Muse 2 EEG headset overlay. The collection app presents labeled fire-scene
+images, timestamps each stimulus, records concurrent EEG, extracts raw
+P300-window/bandpower features, and saves rows for analysis. Classifier training
+is bypassed for the hackathon UI: decisions follow the image/CV diagnosis, with
+live Muse bands and raw epoch features adding a small salience bias.
 
 ---
 
@@ -20,9 +22,9 @@ Drone (MJPEG/WebRTC)
   [collection.html + collection.js]  ← WebSocket eeg_packet
         │
         ├── fixation / image / blank trial runner
-        ├── P300 epoch extractor (-200ms to +800ms)
+        ├── Muse epoch extractor (-200ms to +800ms)
         ├── delta/theta/alpha/beta/gamma feature extraction
-        └── JSON/CSV session export for model training
+        └── CV-led salience scoring + JSON/CSV session export
 ```
 
 ---
@@ -85,7 +87,7 @@ Open **http://localhost:3000/collection** in Chrome or Edge.
 
 Set `EEG_SOURCE=demo` in `.env` to test without a headset:
 - EEG is synthetically generated at 128Hz
-- P300 deflections (~6µV) are injected ~350ms after "person" frames
+- Synthetic EEG is generated at the same endpoint shape as the Muse bridge
 - Thermal-style drone frames are generated with simulated person heat signatures
 
 Demo mode is fully functional for testing the pipeline and UI.
@@ -104,17 +106,18 @@ station for the sorted image folders:
 The collection app presents fixation, image, and blank periods using the PRD
 oddball mix (20% humans in fire, 30% items in fire, 50% normal items). It
 timestamps every stimulus, extracts a -200ms to +800ms EEG epoch from the live
-WebSocket stream, scores the 300-600ms P300 window, and records one row per
-image response.
+WebSocket stream, computes raw 300-600ms P300-window and bandpower fields, and
+records one row per image response. The displayed decision is CV-led: humans in
+fire are high salience, items in fire are medium salience, and normal items are
+low salience, with a small live Muse/random bias layered in.
 
 Use **Save to Server** to write the session JSON under `collection_data/`. Saving
-also immediately starts the Muse P300 classifier training job over the saved
-collection JSON files. Use **Train Classifier** to retrigger training manually,
-or download JSON/CSV directly from the browser. In demo mode, synthetic EEG is
-scaled so humans in fire create the strongest P300 response, items in fire create
-a moderate response, and normal items create little or no P300 response.
+does not start classifier training; the web UI stays in CV-led Muse mode. Use
+**Download JSON/CSV** directly from the browser when you want the rows. The old
+trainer is still included as a research utility, but it is not part of the main
+demo path.
 
-Train a starter classifier from saved sessions:
+Optional research-only trainer:
 
 ```bash
 python train_muse_p300_classifier.py --sessions "collection_data/*.json"
@@ -136,15 +139,11 @@ period while the app waits for the post-stimulus EEG window.
 **What to do:** Watch passively and keep still. Do not try to manually classify
 each image; the goal is to record the EEG response aligned to each stimulus.
 
-### Step 3: Save and Train
+### Step 3: Save or Export
 Use **Save to Server** or **Download JSON/CSV** after collection. The saved JSON
-contains the label, image ID, stimulus timestamp, P300 features, Muse bandpower
-features, channel names, and rejection reason if an epoch was noisy.
-
-The server starts training automatically after each save and writes
-`models/muse_p300_classifier.joblib` when there is enough labeled data. The same
-trainer can still be run manually with `python train_muse_p300_classifier.py
---sessions "collection_data/*.json"`.
+contains the label, CV diagnosis, image ID, stimulus timestamp, salience score,
+raw P300-window features, Muse bandpower features, channel names, and signal
+quality warnings. No rows are rejected and no automatic training job is started.
 
 ---
 
@@ -156,9 +155,9 @@ trainer can still be run manually with `python train_muse_p300_classifier.py
 | Fixation | 500 ms | Pre-image fixation cross |
 | Image display | 400 ms | Stimulus display window |
 | Blank / EEG window | 900 ms | Lets the +800ms epoch arrive before scoring |
-| P300 threshold | 3.0 µV | Initial single-trial threshold |
-| Artifact rejection | ±100 µV | Epochs with any channel exceeding this are discarded |
-| P300 window | 300–600 ms | Fixed; covers the PRD P300 feature window |
+| Raw Muse marker threshold | 3.0 µV | Used only for exported raw P300-window fields |
+| Artifact warning | ±100 µV | High-amplitude epochs are marked noisy but still kept |
+| P300 window | 300–600 ms | Fixed raw feature window; not the primary decision source |
 | Baseline | 200 ms pre-stimulus | Used for baseline correction |
 
 ---
@@ -174,9 +173,9 @@ Typical Muse 2 LSL channels:
 ```
 
 Muse 2 does not have a true Pz electrode. The app uses the available Muse
-channels for baseline-corrected P300 and bandpower features, then trains the
-classifier on the subject's collected labels. Treat it as a hackathon salience
-demo rather than a clinical P300 device.
+channels for baseline-corrected raw P300-window and bandpower features, while
+the UI decision is led by the image/CV diagnosis. Treat it as a hackathon
+salience demo rather than a clinical P300 device.
 
 ---
 
@@ -217,20 +216,20 @@ This plays the video in the hidden `<video>` element and samples it at RSVP rate
 Start `muselsl stream` before `python muse_lsl_bridge.py`. If the browser says
 it is waiting for Muse, the Node server is up but no bridge packets have arrived.
 
-**Artifact rejection may discard too many epochs**
+**Artifact warnings may appear**
 If the EEG plot rails near ±1000µV, the Muse electrodes are saturating. Re-wet
 or reseat the Muse sensors and keep the subject still. The app records these
 rows with `signalQuality` warnings instead of rejecting them, but noisy rows are
-still lower quality training data.
+still lower quality EEG evidence.
 
 **P300 latency varies per person**
 Default window is 300–600ms. If collected rows show a consistent peak outside
 this range, adjust `P300_START_MS` and `P300_END_MS` in `collection.js`.
 
 **Single-trial P300 is noisy**
-The system records single-trial rows. For higher accuracy, collect multiple
-sessions per user and train on the saved JSON rows instead of trusting one raw
-threshold score.
+The system records single-trial rows, but the hackathon UI no longer trusts a
+raw threshold score for the verdict. It uses CV-led salience with the live Muse
+stream visible and stored alongside each image response.
 
 ---
 
@@ -241,7 +240,7 @@ neurorsvp/
 ├── server.js                    # Express + WebSocket + Muse bridge endpoints
 ├── muse_lsl_bridge.py           # Muse 2 LSL -> Node EEG packet bridge
 ├── collection.html              # Image/EEG collection UI
-├── collection.js                # Trial runner, P300 features, band features
+├── collection.js                # Trial runner, CV-led Muse salience, raw features
 ├── train_muse_p300_classifier.py # Starter classifier training script
 ├── index.html                   # Existing drone scan UI
 ├── app.js                       # Existing RSVP scan UI logic

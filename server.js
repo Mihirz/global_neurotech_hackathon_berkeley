@@ -150,14 +150,28 @@ let latestMusePacketAt = null;
 let latestMuseBands = null;
 let latestMuseStatusBroadcastAt = 0;
 let trainingJob = {
-  state: 'idle',
+  state: 'bypassed',
   startedAt: null,
   finishedAt: null,
   exitCode: null,
   modelPath: null,
-  message: 'No training run has started.',
+  message: 'Classifier training is bypassed. Collection decisions use CV-led live Muse salience mode.',
   output: '',
 };
+
+function collectionTrainingBypassed(reason = 'cv-led muse mode') {
+  trainingJob = {
+    state: 'bypassed',
+    startedAt: null,
+    finishedAt: new Date().toISOString(),
+    exitCode: 0,
+    modelPath: null,
+    message: `Training bypassed (${reason}). Using CV-led image diagnosis with live Muse salience overlay.`,
+    output: '',
+  };
+  broadcast('collection_training', trainingJob);
+  return trainingJob;
+}
 
 const COLLECTION_CATEGORIES = {
   'humans in fire': {
@@ -560,7 +574,7 @@ app.post('/api/collection/sessions', async (req, res) => {
   const safeId = String(session.sessionId).replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
   const outPath = path.join(outDir, `${safeId}.json`);
   await fsp.writeFile(outPath, JSON.stringify(saved, null, 2), 'utf8');
-  const training = startCollectionTraining(`saved session ${session.sessionId}`);
+  const training = collectionTrainingBypassed(`saved session ${session.sessionId}`);
 
   res.json({ ok: true, sessionId: session.sessionId, events: session.events.length, path: outPath, training });
 });
@@ -572,7 +586,7 @@ app.get('/api/collection/sessions/:sessionId', (req, res) => {
 });
 
 app.post('/api/collection/train', (_req, res) => {
-  res.json({ ok: true, training: startCollectionTraining('manual request') });
+  res.json({ ok: true, training: collectionTrainingBypassed('manual request') });
 });
 
 app.get('/api/collection/training-status', (_req, res) => {

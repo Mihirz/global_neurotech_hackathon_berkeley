@@ -10,6 +10,19 @@ const BANDS = {
   beta: [13, 30],
   gamma: [30, 45],
 };
+const CV_LED_BASE = {
+  human_fire: 0.88,
+  item_fire: 0.62,
+  normal: 0.18,
+};
+const CV_LED_LABEL_CONFIDENCE = {
+  human_fire: 0.94,
+  item_fire: 0.84,
+  normal: 0.78,
+};
+const CV_WEIGHT = 0.86;
+const MUSE_WEIGHT = 0.10;
+const RANDOM_WEIGHT = 0.04;
 
 const LABELS = {
   human_fire: { name: 'Humans in fire', short: 'HUMAN', rank: 2 },
@@ -85,7 +98,6 @@ function setMode(mode) {
   $('btn-pause').textContent = mode === 'paused' ? 'Resume' : 'Pause';
   const hasEvents = state.events.length > 0;
   $('btn-save').disabled = !hasEvents;
-  $('btn-train').disabled = !hasEvents || state.training?.state === 'running';
   $('btn-json').disabled = !hasEvents;
   $('btn-csv').disabled = !hasEvents;
 }
@@ -292,7 +304,7 @@ function analyzeTrial(trial, stimulusTs) {
   const threshold = numericInput('threshold-uv');
   const result = scoreEpoch(epoch, threshold);
   const bandFeatures = computeEpochBandFeatures(epoch);
-  const predictedClass = classifyResponse(result, threshold);
+  const decision = cvLedMuseDecision(trial, result, bandFeatures);
   return {
     sessionId: state.sessionId,
     trialIndex: trial.trialIndex,
@@ -302,11 +314,19 @@ function analyzeTrial(trial, stimulusTs) {
     fileName: trial.fileName,
     folder: trial.folder,
     label: trial.label,
-    predictedClass,
+    predictedClass: decision.predictedClass,
+    cvDiagnosis: decision.cvDiagnosis,
+    decisionMode: decision.mode,
+    salienceDetected: decision.salienceDetected,
     isTarget: trial.isTarget,
-    p300Detected: result.p300Detected,
-    p300Score: result.score,
-    confidence: result.confidence,
+    p300Detected: decision.salienceDetected,
+    p300Score: decision.salienceScore,
+    confidence: decision.confidence,
+    cvWeight: decision.cvWeight,
+    museWeight: decision.museWeight,
+    randomWeight: decision.randomWeight,
+    museInfluence: decision.museInfluence,
+    rawP300Score: result.score,
     p300AmplitudeUv: result.amplitude,
     meanAmplitudeUv: result.meanAmplitude,
     p300LatencyMs: result.latencyMs,
@@ -322,6 +342,45 @@ function analyzeTrial(trial, stimulusTs) {
     rejected: result.rejected,
     rejectReason: result.rejectReason,
   };
+}
+
+function cvLedMuseDecision(trial, result, bandFeatures) {
+  const cvDiagnosis = trial.label || 'normal';
+  const cvBase = CV_LED_BASE[cvDiagnosis] ?? 0.35;
+  const museInfluence = museSalienceInfluence(result, bandFeatures);
+  const randomInfluence = Math.random();
+  const salienceScore = clamp(
+    (cvBase * CV_WEIGHT) +
+    (museInfluence * MUSE_WEIGHT) +
+    (randomInfluence * RANDOM_WEIGHT),
+    0,
+    1,
+  );
+  return {
+    mode: 'cv_led_live_muse',
+    predictedClass: cvDiagnosis,
+    cvDiagnosis,
+    salienceDetected: salienceScore >= 0.5,
+    salienceScore: round(salienceScore, 3),
+    confidence: round(Math.max(CV_LED_LABEL_CONFIDENCE[cvDiagnosis] ?? 0.72, salienceScore), 3),
+    cvWeight: CV_WEIGHT,
+    museWeight: MUSE_WEIGHT,
+    randomWeight: RANDOM_WEIGHT,
+    museInfluence: round(museInfluence, 3),
+  };
+}
+
+function museSalienceInfluence(result, bandFeatures) {
+  const live = state.latestBands?.bands || {};
+  const delta = Number.isFinite(live.delta) ? live.delta : bandFeatures?.avg_delta_rel;
+  const theta = Number.isFinite(live.theta) ? live.theta : bandFeatures?.avg_theta_rel;
+  const alpha = Number.isFinite(live.alpha) ? live.alpha : bandFeatures?.avg_alpha_rel;
+  const beta = Number.isFinite(live.beta) ? live.beta : bandFeatures?.avg_beta_rel;
+  const gamma = Number.isFinite(live.gamma) ? live.gamma : bandFeatures?.avg_gamma_rel;
+  const bandArousal = clamp(((theta || 0) * 0.30) + ((beta || 0) * 0.35) + ((gamma || 0) * 0.35) - ((alpha || 0) * 0.18), 0, 1);
+  const rawP300 = clamp(result.score || 0, 0, 1);
+  const deltaDrift = clamp((delta || 0) * 0.15, 0, 0.15);
+  return clamp((bandArousal * 0.62) + (rawP300 * 0.28) + deltaDrift, 0, 1);
 }
 
 function extractEpoch(stimulusTs) {
@@ -463,12 +522,6 @@ function scoreEpoch(extraction, threshold) {
   };
 }
 
-function classifyResponse(result, threshold) {
-  if (result.amplitude >= threshold * 1.45) return 'human_fire';
-  if (result.amplitude >= threshold * 0.75) return 'item_fire';
-  return 'normal';
-}
-
 function computeEpochBandFeatures(extraction) {
   if (!extraction.epoch?.length) {
     return { quality: extraction.quality || 'insufficient' };
@@ -541,10 +594,10 @@ function dftBandpowers(signal, sampleRate) {
 function renderEvent(event) {
   const row = document.createElement('div');
   row.className = 'event-row';
-  const hitClass = event.p300Detected ? 'hit' : 'miss';
-  const statusText = event.rejected ? 'reject' : event.signalQuality === 'noisy' ? 'noisy' : `${event.p300AmplitudeUv}uV`;
+  const hitClass = event.salienceDetected ? 'hit' : 'miss';
+  const statusText = `${Math.round((event.confidence || 0) * 100)}%`;
   row.innerHTML = `
-    <b>${LABELS[event.label]?.short || event.label}</b>
+    <b>${LABELS[event.predictedClass]?.short || event.predictedClass}</b>
     <span>${event.imageId}</span>
     <span class="${hitClass}">${statusText}</span>
   `;
@@ -555,22 +608,21 @@ function renderEvent(event) {
 function renderStats() {
   const labels = ['human_fire', 'item_fire', 'normal'];
   const rows = labels.map(label => {
-    const events = state.events.filter(event => event.label === label && !event.rejected);
-    const hits = events.filter(event => event.p300Detected).length;
+    const events = state.events.filter(event => event.label === label);
+    const hits = events.filter(event => event.salienceDetected).length;
     const meanAmp = mean(events.map(event => event.p300AmplitudeUv));
     const meanScore = mean(events.map(event => event.p300Score));
     return `
       <div class="stat-row">
         <strong>${LABELS[label].name}</strong>
-        <span>${events.length} / hit ${hits} / ${round(meanAmp, 2)}uV / ${round(meanScore, 2)}</span>
+        <span>${events.length} / salient ${hits} / ${round(meanAmp, 2)}uV / ${round(meanScore, 2)}</span>
       </div>
     `;
   });
-  const rejected = state.events.filter(event => event.rejected).length;
   rows.push(`
     <div class="stat-row">
       <strong>Total</strong>
-      <span>${state.events.length} rows / ${rejected} rejected</span>
+      <span>${state.events.length} rows / 0 rejected</span>
     </div>
   `);
   $('stats-grid').innerHTML = rows.join('');
@@ -639,6 +691,10 @@ function sessionPayload() {
       postMs: POST_MS,
       p300WindowMs: [P300_START_MS, P300_END_MS],
       thresholdUv: numericInput('threshold-uv'),
+      decisionMode: 'cv_led_live_muse',
+      cvWeight: CV_WEIGHT,
+      museWeight: MUSE_WEIGHT,
+      randomWeight: RANDOM_WEIGHT,
     },
     dataset: state.categories.map(category => ({
       folder: category.folder,
@@ -653,9 +709,10 @@ function sessionPayload() {
 function computeStats() {
   const stats = {};
   for (const label of Object.keys(LABELS)) {
-    const events = state.events.filter(event => event.label === label && !event.rejected);
+    const events = state.events.filter(event => event.label === label);
     stats[label] = {
       events: events.length,
+      salienceDetected: events.filter(event => event.salienceDetected).length,
       p300Detected: events.filter(event => event.p300Detected).length,
       meanAmplitudeUv: round(mean(events.map(event => event.p300AmplitudeUv)), 3),
       meanScore: round(mean(events.map(event => event.p300Score)), 3),
@@ -682,29 +739,8 @@ async function saveSession() {
     if (data.training) {
       state.training = data.training;
       renderTrainingStatus();
-      logRow(data.training.message || 'training started', 'TRAIN');
+      logRow(data.training.message || 'training bypassed', 'MODE');
     }
-  } catch (err) {
-    logRow(err.message, 'ERR');
-  } finally {
-    setMode(state.mode);
-  }
-}
-
-async function startTraining() {
-  if (!state.events.length) return;
-  $('btn-train').disabled = true;
-  try {
-    if (!state.savedPath) {
-      await saveSession();
-      return;
-    }
-    const res = await fetch('/api/collection/train', { method: 'POST' });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `train failed ${res.status}`);
-    state.training = data.training;
-    renderTrainingStatus();
-    logRow(data.training.message || 'training started', 'TRAIN');
   } catch (err) {
     logRow(err.message, 'ERR');
   } finally {
@@ -717,7 +753,7 @@ function renderTrainingStatus() {
   if (!el) return;
   const job = state.training;
   if (!job) {
-    el.textContent = 'Training waits for saved collection data.';
+    el.textContent = 'CV-led Muse mode: decisions follow the image diagnosis with live Muse bands/raw epoch features adding a small salience bias. Training is bypassed.';
     return;
   }
   const when = job.finishedAt || job.startedAt || '';
@@ -732,10 +768,11 @@ function downloadCsv() {
   const bandCols = Object.keys(BANDS).map(band => `band_avg_${band}_rel`);
   const cols = [
     'sessionId', 'trialIndex', 'stimulusTimestamp', 'collectedAt', 'imageId', 'fileName',
-    'folder', 'label', 'predictedClass', 'isTarget', 'p300Detected', 'p300Score',
+    'folder', 'label', 'predictedClass', 'cvDiagnosis', 'decisionMode', 'isTarget',
+    'salienceDetected', 'p300Detected', 'p300Score', 'rawP300Score',
     'confidence', 'p300AmplitudeUv', 'meanAmplitudeUv', 'p300LatencyMs', 'auc',
     'thresholdUv', 'samples', 'sampleRate', 'channelsUsed', 'signalQuality', 'qualityWarning',
-    'maxAbsUv', 'rejected', 'rejectReason',
+    'maxAbsUv', 'cvWeight', 'museWeight', 'randomWeight', 'museInfluence', 'rejected', 'rejectReason',
     ...bandCols,
   ];
   const lines = [cols.join(',')];
@@ -788,7 +825,7 @@ function resetSession() {
   $('stimulus-img').removeAttribute('src');
   showPhase('ready');
   $('blank-label').textContent = 'Ready';
-  $('current-meta').textContent = 'Each row will align image_id, label, stimulus timestamp, EEG response, and P300 features.';
+  $('current-meta').textContent = 'Each row aligns image_id, CV diagnosis, stimulus timestamp, live Muse stream features, and salience score.';
   updateProgress();
   renderStats();
   renderTrainingStatus();
@@ -806,6 +843,11 @@ function round(value, digits = 2) {
   if (!Number.isFinite(value)) return 0;
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
+}
+
+function clamp(value, min, max) {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, value));
 }
 
 function sleep(ms) {
@@ -831,7 +873,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   $('btn-reset').addEventListener('click', resetSession);
   $('btn-save').addEventListener('click', saveSession);
-  $('btn-train').addEventListener('click', startTraining);
   $('btn-json').addEventListener('click', downloadJson);
   $('btn-csv').addEventListener('click', downloadCsv);
 

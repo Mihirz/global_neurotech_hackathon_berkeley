@@ -30,6 +30,16 @@ let cortex           = null;
 const CV_PROMPT = `Firefighting SAR drone frame. Respond ONLY with valid JSON:
 {"personDetected":boolean,"confidence":number,"objects":[],"framePosition":"top-left|top-center|top-right|center-left|center|center-right|bottom-left|bottom-center|bottom-right","estimatedCount":number,"thermalSignature":"string","notes":"string"}`;
 
+const TRIP_SUMMARY_PROMPT = `You are writing an after-action summary for firefighters reviewing a drone + EEG scan.
+Use only the supplied JSON. Do not invent victims, locations, or hazards.
+Write concise operational prose with these sections:
+1. Situation summary
+2. People / victim candidates
+3. Fire and smoke events
+4. EEG corroboration
+5. Recommended next actions
+Mention uncertainty when detections are weak or GPS is missing.`;
+
 function getCvProvider() {
   const requested = (process.env.CV_ANALYSIS_PROVIDER || 'auto').toLowerCase();
   if (requested === 'openai' && process.env.OPENAI_API_KEY) return 'openai';
@@ -108,6 +118,85 @@ async function analyzeWithOpenAI(imageDataUrl) {
   if (!response.ok) throw new Error(data.error?.message || `OpenAI error ${response.status}`);
   const text = data.output_text || data.output?.flatMap(item => item.content || []).map(part => part.text || '').join('') || '{}';
   return parseCvJson(text);
+}
+
+async function summarizeWithOpenAI(report) {
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+      input: [{
+        role: 'user',
+        content: [{
+          type: 'input_text',
+          text: `${TRIP_SUMMARY_PROMPT}\n\nTrip JSON:\n${JSON.stringify(report, null, 2)}`,
+        }],
+      }],
+      max_output_tokens: 900,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error?.message || `OpenAI error ${response.status}`);
+  return data.output_text || data.output?.flatMap(item => item.content || []).map(part => part.text || '').join('') || '';
+}
+
+async function summarizeWithAnthropic(report) {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type':      'application/json',
+      'x-api-key':         process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514',
+      max_tokens: 900,
+      messages: [{
+        role: 'user',
+        content: `${TRIP_SUMMARY_PROMPT}\n\nTrip JSON:\n${JSON.stringify(report, null, 2)}`,
+      }],
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error?.message || `Anthropic error ${response.status}`);
+  return data.content?.map(b => b.text || '').join('') || '';
+}
+
+function formatTripSummaryFallback(report) {
+  const s = report.summary || {};
+  const lines = s.lines?.length ? s.lines : ['No trip events have been recorded yet.'];
+  const risks = report.risks || [];
+  const victims = report.victims || [];
+  const eegHits = (report.timeline || []).filter(e => e.type === 'eeg_p300');
+
+  return [
+    '1. Situation summary',
+    ...lines.map(line => `- ${line}`),
+    '',
+    '2. People / victim candidates',
+    victims.length
+      ? victims.map(v => `- ${v.victim_id}: priority ${Math.round(v.priority * 100)}%, confidence ${Math.round(v.max_confidence * 100)}%, ${v.detections} detection(s), GPS ${v.gps?.lat != null ? `${v.gps.lat.toFixed(5)}, ${v.gps.lon.toFixed(5)}` : 'unknown'}.`).join('\n')
+      : '- No persistent victim candidates were detected.',
+    '',
+    '3. Fire and smoke events',
+    risks.length
+      ? risks.map(r => `- ${r.kind.toUpperCase()}: severity ${(r.max_severity * 100).toFixed(1)}%, ${r.frame_count} frame(s), duration ${r.duration_s}s, GPS ${r.gps?.lat != null ? `${r.gps.lat.toFixed(5)}, ${r.gps.lon.toFixed(5)}` : 'unknown'}.`).join('\n')
+      : '- No fire or smoke events were detected.',
+    '',
+    '4. EEG corroboration',
+    eegHits.length
+      ? `- ${eegHits.length} firefighter P300 hit(s) were logged during the trip.`
+      : '- No firefighter P300 hits were logged.',
+    '',
+    '5. Recommended next actions',
+    risks.length || victims.length
+      ? '- Re-fly the highest-risk areas slowly, prioritize confirmed person candidates, and verify any GPS-unknown hazards manually.'
+      : '- Continue scanning with a stable mirrored feed and broad coverage until the detector has enough frames to summarize.',
+  ].join('\n');
 }
 
 // ── Broadcast helpers ─────────────────────────────────────────────────────────
@@ -301,6 +390,61 @@ app.post('/api/analyze/:frameId', async (req, res) => {
     res.json(cv);
   } catch (err) {
     console.error('[CV] Failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── REST: LLM Trip Summary ───────────────────────────────────────────────────
+app.post('/api/trip-summary', async (req, res) => {
+  const provider = getCvProvider();
+  let report = req.body?.report || null;
+
+  if (!report) {
+    try {
+      const detectorUrl = process.env.DETECTOR_URL || 'http://127.0.0.1:8000';
+      const detectorRes = await fetch(`${detectorUrl}/insights`);
+      if (detectorRes.ok) report = await detectorRes.json();
+    } catch {}
+  }
+
+  if (!report) return res.status(400).json({ error: 'No trip report available yet' });
+
+  const compactReport = {
+    generatedAt: new Date().toISOString(),
+    summary: report.summary || {},
+    victims: (report.victims || []).slice(0, 20),
+    risks: (report.risks || []).slice(0, 30),
+    timeline: (report.timeline || []).slice(-60),
+    heatmap: (report.heatmap || []).slice(0, 30),
+    importantFrames: (report.important_frames || []).slice(0, 24).map(({ thumbnail, ...frame }) => frame),
+    p300Detections: sessionDetections.map(d => ({
+      frameId: d.frameId,
+      ts: d.ts,
+      amplitude: d.amplitude,
+      score: d.score,
+      gps: d.gps || null,
+      cv: d.cv || null,
+      confirmed: d.confirmed,
+    })).slice(-50),
+    telemetrySamples: telemetryLog.slice(-20),
+  };
+
+  if (!provider) {
+    return res.json({
+      ok: true,
+      provider: 'demo',
+      summary: formatTripSummaryFallback(compactReport),
+      report: compactReport,
+    });
+  }
+
+  try {
+    const summary = provider === 'openai'
+      ? await summarizeWithOpenAI(compactReport)
+      : await summarizeWithAnthropic(compactReport);
+    res.json({ ok: true, provider, summary, report: compactReport });
+  } catch (err) {
+    console.error('[TripSummary] Failed:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

@@ -1,6 +1,6 @@
 import { EEGBuffer, Calibrator, extractEpoch, scoreEpoch, EPOCH_POST_MS } from './p300.js';
 import { startCvIngest, stopCvIngest, notifyEegHit, resetDetector } from './cv_ingest.js';
-import { startInsightsPoll, stopInsightsPoll } from './insights.js';
+import { startInsightsPoll, stopInsightsPoll, refreshInsights, generateTripSummary, renderSessionReview } from './insights.js';
 
 // ─── State ───────────────────────────────────────────────────────────────────
 const state = {
@@ -30,6 +30,7 @@ const state = {
 
   // Signal display
   eegPlotBuffer: [],    // last N µV values for waveform display
+  cvIngestStarted: false,
 };
 
 // ─── WebSocket ────────────────────────────────────────────────────────────────
@@ -88,6 +89,7 @@ function initDroneFeed(url) {
   video.play().catch(() => {});
   document.getElementById('no-feed').style.display = 'none';
   document.getElementById('rsvp-container').classList.add('show-video');
+  document.getElementById('rsvp-container').classList.remove('show-rsvp');
   log(`Drone feed: ${url}`);
 }
 
@@ -105,10 +107,14 @@ async function captureScreenAsDroneFeed() {
     await video.play();
     document.getElementById('no-feed').style.display = 'none';
     document.getElementById('rsvp-container').classList.add('show-video');
+    document.getElementById('rsvp-container').classList.remove('show-rsvp');
     state.droneUrl = 'screen-capture';
     stream.getVideoTracks()[0].addEventListener('ended', () => {
       log('Screen capture ended');
       video.srcObject = null;
+      state.droneUrl = null;
+      document.getElementById('rsvp-container').classList.remove('show-video');
+      document.getElementById('no-feed').style.display = '';
     });
     log('Screen capture active — pick the iPhone Mirroring window');
   } catch (err) {
@@ -119,6 +125,28 @@ async function captureScreenAsDroneFeed() {
 function hasLiveDroneVideo() {
   const video = document.getElementById('drone-video');
   return !!state.droneUrl && video && video.readyState >= 2 && video.videoWidth > 0;
+}
+
+function updateScanVisualMode() {
+  const container = document.getElementById('rsvp-container');
+  const rsvpImg = document.getElementById('rsvp-img');
+  if (state.mode === 'calibrating') {
+    container.classList.add('show-rsvp');
+    container.classList.remove('show-video');
+    return false;
+  }
+
+  const live = hasLiveDroneVideo();
+  if (state.mode === 'scanning') {
+    container.classList.toggle('show-video', live);
+    container.classList.toggle('show-rsvp', !live);
+    if (live) rsvpImg.removeAttribute('src');
+    return live;
+  }
+
+  container.classList.remove('show-rsvp');
+  container.classList.toggle('show-video', !!state.droneUrl);
+  return live;
 }
 
 // Demo: sample from a static video element or canvas pattern
@@ -189,13 +217,14 @@ function startRSVP() {
 
   state.rsvpInterval = setInterval(() => {
     const imgSrc = sampleDroneFrame();
+    const liveVideo = updateScanVisualMode();
     const ts = performance.timeOrigin + performance.now();
     const frameId = state.frameId++;
 
     // Display sampled RSVP frames only in simulated mode. With a real shared
     // phone feed, keep the live video visible so Chrome screen capture does not
     // show a copied/recursive frame on top of the source feed.
-    if (!hasLiveDroneVideo()) {
+    if (!liveVideo) {
       document.getElementById('rsvp-img').src = imgSrc;
     }
     document.getElementById('frame-counter').textContent = `F${String(frameId).padStart(4,'0')}`;
@@ -335,6 +364,7 @@ async function runCalibration() {
       state.p300Threshold = result.threshold;
       document.getElementById('threshold-val').textContent = `${result.threshold} µV`;
       document.getElementById('p300-peak-val').textContent = `${result.p300PeakMs} ms`;
+      document.getElementById('threshold-display').textContent = `${result.threshold}µV`;
       log(`Calibration complete — threshold: ${result.threshold}µV, P300 peak: ${result.p300PeakMs}ms`);
       renderCalibrationResult(result);
     } else {
@@ -472,24 +502,46 @@ function setMode(mode) {
 
   document.getElementById('btn-scan').disabled = mode === 'scanning' || mode === 'calibrating';
   document.getElementById('btn-pause').disabled = mode !== 'scanning';
+  document.getElementById('btn-stop-scan').disabled = mode !== 'scanning';
   document.getElementById('btn-cal').disabled = mode === 'scanning' || mode === 'calibrating';
   document.getElementById('mode-label').textContent = mode.toUpperCase();
 
-  const container = document.getElementById('rsvp-container');
-  const hasVideo  = !!state.droneUrl;
-  if (mode === 'calibrating') {
-    container.classList.add('show-rsvp');
-    container.classList.remove('show-video');
-  } else if (mode === 'scanning') {
-    container.classList.toggle('show-rsvp', !hasLiveDroneVideo());
-    container.classList.toggle('show-video', hasLiveDroneVideo());
-  } else {
-    container.classList.remove('show-rsvp');
-    if (hasVideo) container.classList.add('show-video');
-  }
+  updateScanVisualMode();
 
-  if (mode === 'scanning') startRSVP();
-  if (mode === 'idle' || mode === 'paused') stopRSVP();
+  if (mode === 'scanning') {
+    startRSVP();
+    startFlightCvIngest();
+  }
+  if (mode === 'idle' || mode === 'paused') {
+    stopRSVP();
+    stopCvIngest();
+    state.cvIngestStarted = false;
+  }
+}
+
+function startFlightCvIngest() {
+  if (state.cvIngestStarted) return;
+  state.cvIngestStarted = true;
+  startCvIngest({
+    getGps: () => state.latestTelemetry || null,
+    onFrame: (r) => {
+      const el = document.getElementById('cv-pulse');
+      if (!el) return;
+      el.classList.add('active');
+      setTimeout(() => el.classList.remove('active'), 250);
+      const cvLast = document.getElementById('cv-last');
+      if (!cvLast) return;
+      if (r && (r.persons_count > 0 || r.fire || r.smoke)) {
+        const parts = [];
+        if (r.persons_count) parts.push(`${r.persons_count} person candidate${r.persons_count === 1 ? '' : 's'}`);
+        if (r.fire)  parts.push(`fire ${Math.round((r.fire_area || 0) * 100)}%`);
+        if (r.smoke) parts.push(`smoke ${Math.round((r.smoke_area || 0) * 100)}%`);
+        cvLast.textContent = parts.join(' · ');
+      } else if (r && cvLast) {
+        cvLast.textContent = `clear frame · ${r.session_size} sampled`;
+      }
+    },
+  });
 }
 
 function renderFlaggedFrames() {
@@ -513,6 +565,7 @@ function renderFlaggedFrames() {
   });
 
   document.getElementById('detection-count').textContent = state.flaggedFrames.length;
+  document.getElementById('detection-count-left').textContent = state.flaggedFrames.length;
 }
 
 function flashDetection() {
@@ -540,6 +593,30 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+async function stopScanAndShowReport() {
+  const overlay = document.getElementById('session-review');
+  const status = document.getElementById('review-status');
+  const llm = document.getElementById('review-llm-summary');
+  if (overlay) overlay.classList.add('open');
+  if (status) status.textContent = 'Stopping scan and compiling report...';
+  if (llm) llm.textContent = 'Generating scan summary...';
+
+  setMode('paused');
+  log('Scan stopped — compiling session report');
+
+  const report = await refreshInsights();
+  renderSessionReview(report);
+  if (status) status.textContent = 'Generating scan summary...';
+
+  const llmData = await generateTripSummary({
+    outputId: 'review-llm-summary',
+    buttonId: 'btn-stop-scan',
+    report,
+  });
+  renderSessionReview(report, llmData);
+  if (status) status.textContent = 'Scan report ready';
+}
+
 // ─── Event bindings ───────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   connectWS();
@@ -551,6 +628,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('btn-scan').addEventListener('click', () => setMode('scanning'));
   document.getElementById('btn-pause').addEventListener('click', () => setMode('paused'));
+  document.getElementById('btn-stop-scan').addEventListener('click', stopScanAndShowReport);
   document.getElementById('btn-capture-screen').addEventListener('click', captureScreenAsDroneFeed);
 
   document.getElementById('btn-reset').addEventListener('click', () => {
@@ -573,6 +651,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('threshold-slider').addEventListener('input', (e) => {
     state.p300Threshold = parseFloat(e.target.value);
     document.getElementById('threshold-val').textContent = `${state.p300Threshold.toFixed(1)} µV`;
+    document.getElementById('threshold-display').textContent = `${state.p300Threshold.toFixed(1)}µV`;
   });
 
   // Resize canvases on load
@@ -592,29 +671,18 @@ document.addEventListener('DOMContentLoaded', () => {
   log('NeuroRSVP initialized — calibrate before scanning');
 
   // ── CV + insights pipeline ─────────────────────────────────────────────────
-  startCvIngest({
-    getGps: () => state.latestTelemetry || null,
-    onFrame: (r) => {
-      const el = document.getElementById('cv-pulse');
-      if (!el) return;
-      el.classList.add('active');
-      setTimeout(() => el.classList.remove('active'), 250);
-      const cvLast = document.getElementById('cv-last');
-      if (!cvLast) return;
-      if (r && (r.persons_count > 0 || r.fire || r.smoke)) {
-        const parts = [];
-        if (r.persons_count) parts.push(`${r.persons_count} person candidate${r.persons_count === 1 ? '' : 's'}`);
-        if (r.fire)  parts.push('fire');
-        if (r.smoke) parts.push('smoke');
-        cvLast.textContent = parts.join(' · ');
-      } else if (r && cvLast) {
-        cvLast.textContent = `clear frame · ${r.session_size} sampled`;
-      }
-    },
-  });
   startInsightsPoll();
 
   document.getElementById('btn-report')?.addEventListener('click', () => {
+    window.downloadFlightReport?.();
+  });
+  document.getElementById('btn-llm-summary')?.addEventListener('click', () => {
+    window.generateTripSummary?.();
+  });
+  document.getElementById('btn-close-review')?.addEventListener('click', () => {
+    document.getElementById('session-review')?.classList.remove('open');
+  });
+  document.getElementById('btn-review-report')?.addEventListener('click', () => {
     window.downloadFlightReport?.();
   });
   document.getElementById('btn-reset')?.addEventListener('click', () => {

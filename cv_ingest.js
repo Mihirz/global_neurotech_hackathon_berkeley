@@ -4,7 +4,7 @@
 const DETECTOR_URL = window.DETECTOR_URL || 'http://localhost:8000';
 const INGEST_HZ    = 2;   // frames per second sent to the detector
 const JPEG_QUALITY = 0.6;
-const MAX_WIDTH    = 640; // downscale big feeds to keep latency low
+const MAX_WIDTH    = 960; // keep small aerial people visible for YOLO
 
 const cvState = {
   running:   false,

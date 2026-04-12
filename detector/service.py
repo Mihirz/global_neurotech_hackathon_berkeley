@@ -52,8 +52,8 @@ RELEVANT_COCO = {
 VICTIM_CLASSES = {"person"}
 
 # Person-detection filters tuned for aerial / drone context.
-MIN_PERSON_CONF      = 0.32
-MIN_PERSON_AREA_FRAC = 0.0007   # allow smaller aerial victims; clusters handle false positives
+MIN_PERSON_CONF      = 0.24
+MIN_PERSON_AREA_FRAC = 0.00025  # allow smaller aerial victims; clusters handle false positives
 MIN_PERSON_ASPECT    = 0.35     # prone/crouched victims can be wider than upright people
 MAX_PERSON_ASPECT    = 6.5
 MIN_VICTIM_TRACK_HITS = 2
@@ -85,6 +85,7 @@ class FrameRecord:
     eeg_flagged: bool = False
     eeg_amplitude: float | None = None
     eeg_score: float | None = None
+    thumbnail: str | None = None
 
 
 @dataclass
@@ -113,6 +114,16 @@ def decode_image(data_url_or_b64: str) -> np.ndarray:
     return np.array(img)
 
 
+def encode_thumbnail(rgb: np.ndarray, max_width: int = 360) -> str:
+    img = Image.fromarray(rgb)
+    if img.width > max_width:
+        scale = max_width / float(img.width)
+        img = img.resize((max_width, max(1, int(img.height * scale))), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=58, optimize=True)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 # ── Fire / smoke with HSV + connected components ─────────────────────────────
 
 def _component_touch_count(x: int, y: int, w: int, h: int, img_w: int, img_h: int) -> int:
@@ -136,7 +147,7 @@ def detect_fire_smoke(rgb: np.ndarray) -> tuple[dict, dict]:
       • Low saturation, mid value (grey)
       • Large contiguous coverage (≥ 10% of frame)
       • Low hue variance inside the region
-      • Excluded when active fire is dominant (to avoid double-counting)
+      • Tracked independently from active fire when the smoke evidence is strong
     """
     h, w = rgb.shape[:2]
     total = float(h * w)
@@ -244,11 +255,15 @@ def detect_fire_smoke(rgb: np.ndarray) -> tuple[dict, dict]:
     smoke_conf = max(smoke_scores, default=0.0)
     # Guard against uniform bright skies triggering smoke — require the masked
     # region to actually have mid-range brightness variability.
-    smoke_valid = smoke_frac > 0.12 and smoke_conf >= 0.22 and fire_frac < 0.08
+    smoke_valid = smoke_frac > 0.12 and smoke_conf >= 0.22
     if smoke_valid:
         v_in = V[smoke_mask > 0]
         if len(v_in) > 0 and (v_in.std() < 8 or v_in.mean() > 230):
             # Flat / too-bright region — probably clear sky, not smoke.
+            smoke_valid = False
+        if fire_frac >= 0.08 and smoke_frac < 0.20 and smoke_conf < 0.45:
+            # Flames can turn nearby shadows grey; require stronger evidence
+            # before also calling smoke in heavily fire-dominant closeups.
             smoke_valid = False
 
     smoke = {
@@ -266,7 +281,14 @@ def run_yolo(rgb: np.ndarray) -> tuple[list[dict], list[dict]]:
     model = get_model()
     h, w = rgb.shape[:2]
     total = float(h * w)
-    res = model.predict(rgb, verbose=False, conf=0.25, iou=0.45, imgsz=640)[0]
+    res = model.predict(
+        rgb,
+        verbose=False,
+        conf=0.18,
+        iou=0.45,
+        imgsz=960,
+        classes=list(RELEVANT_COCO.keys()),
+    )[0]
     persons: list[dict] = []
     others: list[dict] = []
     if res.boxes is None:
@@ -377,6 +399,7 @@ def ingest(req: IngestRequest):
         eeg_flagged=req.eeg_flagged,
         eeg_amplitude=req.eeg_amplitude,
         eeg_score=req.eeg_score,
+        thumbnail=encode_thumbnail(rgb),
     )
     session.frames.append(record)
     return {
@@ -540,47 +563,55 @@ def _cluster_victims(frames: list[FrameRecord]) -> list[dict]:
 
 def _fire_events(frames: list[FrameRecord]) -> list[dict]:
     events: list[dict] = []
-    current: dict | None = None
+    active: dict[str, dict | None] = {"fire": None, "smoke": None}
 
-    def flush_current():
+    def flush(kind: str):
+        current = active[kind]
         if not current:
             return
         # One-frame UI flashes should not become dispatch-level events unless
         # the region is large enough to be operationally obvious.
         if current["frame_count"] >= 2 or current["max_severity"] >= 0.08:
             events.append(current.copy())
+        active[kind] = None
 
     for f in frames:
-        hot = f.fire["detected"] or f.smoke["detected"]
-        if hot:
-            kind = "fire" if f.fire["detected"] else "smoke"
-            severity = f.fire["area_frac"] if f.fire["detected"] else f.smoke["area_frac"]
-            gap = (f.ts - current["last_ts"]) if current else 0
-            if current and current["kind"] == kind and gap < 3000:
-                current["last_ts"] = f.ts
-                current["last_frame"] = f.frame_id
-                current["max_severity"] = max(current["max_severity"], severity)
-                current["frame_count"] += 1
-                if f.gps and not current.get("gps"):
-                    current["gps"] = f.gps
+        for kind, detected, severity in (
+            ("fire", f.fire["detected"], f.fire["area_frac"]),
+            ("smoke", f.smoke["detected"], f.smoke["area_frac"]),
+        ):
+            current = active[kind]
+            if detected:
+                gap = (f.ts - current["last_ts"]) if current else 0
+                if current and gap < 3000:
+                    current["last_ts"] = f.ts
+                    current["last_frame"] = f.frame_id
+                    current["max_severity"] = max(current["max_severity"], severity)
+                    current["frame_count"] += 1
+                    if f.gps and not current.get("gps"):
+                        current["gps"] = f.gps
+                else:
+                    flush(kind)
+                    active[kind] = {
+                        "kind": kind,
+                        "first_ts": f.ts,
+                        "last_ts": f.ts,
+                        "first_frame": f.frame_id,
+                        "last_frame": f.frame_id,
+                        "max_severity": severity,
+                        "frame_count": 1,
+                        "gps": f.gps,
+                    }
             else:
-                flush_current()
-                current = {
-                    "kind": kind,
-                    "first_ts": f.ts,
-                    "last_ts": f.ts,
-                    "first_frame": f.frame_id,
-                    "last_frame": f.frame_id,
-                    "max_severity": severity,
-                    "frame_count": 1,
-                    "gps": f.gps,
-                }
-    flush_current()
+                flush(kind)
+    flush("fire")
+    flush("smoke")
     for ev in events:
         ev["max_severity"] = round(ev["max_severity"], 4)
         # Duration estimate from frame count (ingest runs ~2 Hz)
         ev["duration_s"] = round((ev["last_ts"] - ev["first_ts"]) / 1000.0
                                   if ev["last_ts"] > 1e10 else ev["last_ts"] - ev["first_ts"], 1)
+    events.sort(key=lambda ev: ev["first_ts"])
     return events
 
 
@@ -630,6 +661,60 @@ def _heatmap(frames):
     return list(counts.values())
 
 
+def _important_frames(frames: list[FrameRecord], eeg_hits: list[dict]) -> list[dict]:
+    items: list[dict] = []
+    eeg_by_frame = {h.get("frame_id"): h for h in eeg_hits}
+
+    for f in frames:
+        reasons: list[str] = []
+        score = 0.0
+        details: dict = {}
+
+        if f.persons:
+            max_conf = max(p["conf"] for p in f.persons)
+            reasons.append(f"{len(f.persons)} person candidate{'s' if len(f.persons) != 1 else ''}")
+            score = max(score, 0.45 + max_conf * 0.45)
+            details["person_count"] = len(f.persons)
+            details["person_confidence"] = round(max_conf, 3)
+
+        if f.fire["detected"]:
+            severity = f.fire["area_frac"]
+            reasons.append(f"fire {severity * 100:.1f}%")
+            score = max(score, min(1.0, 0.35 + severity * 8))
+            details["fire_area_frac"] = severity
+            details["fire_confidence"] = f.fire.get("confidence")
+
+        if f.smoke["detected"]:
+            severity = f.smoke["area_frac"]
+            reasons.append(f"smoke {severity * 100:.1f}%")
+            score = max(score, min(1.0, 0.30 + severity * 3))
+            details["smoke_area_frac"] = severity
+            details["smoke_confidence"] = f.smoke.get("confidence")
+
+        hit = eeg_by_frame.get(f.frame_id)
+        if f.eeg_flagged or hit:
+            amp = f.eeg_amplitude if f.eeg_amplitude is not None else hit.get("amplitude") if hit else None
+            reasons.append(f"P300 {amp:.1f}uV" if amp is not None else "P300")
+            score = max(score, 0.80)
+            details["eeg_amplitude"] = amp
+
+        if not reasons:
+            continue
+
+        items.append({
+            "frame_id": f.frame_id,
+            "ts": f.ts,
+            "reasons": reasons,
+            "score": round(score, 3),
+            "gps": f.gps,
+            "details": details,
+            "thumbnail": f.thumbnail,
+        })
+
+    items.sort(key=lambda it: (-it["score"], it["frame_id"]))
+    return items[:24]
+
+
 def _flight_stats(frames: list[FrameRecord], victims: list[dict], risks: list[dict]):
     if not frames:
         return {}
@@ -676,6 +761,8 @@ def _flight_stats(frames: list[FrameRecord], victims: list[dict], risks: list[di
     top_risk = max([v["priority"] for v in victims] + [min(1.0, r["max_severity"] * 12) for r in risks] + [0.0])
     risk_score = round(min(100.0, top_risk * 65 + critical * 20 + high * 10 + len(risks) * 6), 1)
     fps_observed = total / duration_s if duration_s > 0 else 0.0
+    fire_exposure_s = round(duration_s * fire_frames / total, 1)
+    smoke_exposure_s = round(duration_s * smoke_frames / total, 1)
 
     return {
         "total_frames": total,
@@ -694,6 +781,8 @@ def _flight_stats(frames: list[FrameRecord], victims: list[dict], risks: list[di
         "smoke_events": len([r for r in risks if r["kind"] == "smoke"]),
         "max_fire_severity": round(max_fire_sev, 4),
         "max_smoke_severity": round(max_smoke_sev, 4),
+        "fire_exposure_s": fire_exposure_s,
+        "smoke_exposure_s": smoke_exposure_s,
         "risk_score": risk_score,
         "avg_confidence": round(avg_conf, 3),
         "peak_simultaneous_persons": peak,
@@ -716,6 +805,7 @@ def insights():
     risks = _fire_events(frames)
     timeline = _timeline(victims, risks, session.eeg_hits)
     heatmap = _heatmap(frames)
+    important_frames = _important_frames(frames, session.eeg_hits)
     stats = _flight_stats(frames, victims, risks)
 
     lines: list[str] = []
@@ -759,4 +849,5 @@ def insights():
         "risks": risks,
         "timeline": timeline,
         "heatmap": heatmap,
+        "important_frames": important_frames,
     }

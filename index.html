@@ -394,6 +394,7 @@
   #rsvp-img { image-rendering: pixelated; z-index: 2; }
   #drone-video { z-index: 1; }
   #rsvp-container.show-video #drone-video { display: block; }
+  #rsvp-container.show-video #rsvp-img { display: none; }
   #rsvp-container.show-rsvp  #rsvp-img    { display: block; }
 
   #no-feed {
@@ -677,6 +678,251 @@
     cursor: pointer;
   }
   #btn-report:hover { background: rgba(255,140,0,0.12); }
+  #btn-llm-summary {
+    background: transparent;
+    border: 1px solid var(--blue);
+    color: var(--blue);
+    font-family: var(--condensed);
+    font-size: 10px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 2px;
+    cursor: pointer;
+  }
+  #btn-llm-summary:hover:not(:disabled) { background: rgba(77,166,255,0.12); }
+  #btn-llm-summary:disabled { opacity: .45; cursor: wait; }
+  .llm-summary {
+    border-top: 1px solid var(--border);
+    background: var(--bg2);
+    padding: 8px 12px;
+    max-height: 26vh;
+    overflow-y: auto;
+  }
+  #llm-summary-output {
+    font-family: var(--body);
+    font-size: 12px;
+    color: var(--text);
+    text-align: left;
+  }
+  #llm-summary-output pre,
+  .llm-text {
+    font-family: var(--body);
+    line-height: 1.55;
+    text-align: left;
+    color: var(--text);
+  }
+  .llm-text strong {
+    color: var(--orange);
+    font-weight: 600;
+  }
+  #llm-summary-output .llm-text {
+    padding: 2px 0 0;
+  }
+  .llm-provider {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    text-align: left;
+  }
+
+  .review-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: none;
+    background: rgba(8,12,16,0.96);
+    overflow: auto;
+  }
+  .review-overlay.open { display: block; }
+  .review-shell {
+    min-height: 100vh;
+    padding: 18px 22px;
+  }
+  .review-top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 14px;
+  }
+  .review-title {
+    font-family: var(--condensed);
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    color: var(--orange);
+    text-transform: uppercase;
+    flex: 1;
+  }
+  #review-status {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .review-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr);
+    gap: 14px;
+  }
+  .review-panel {
+    border: 1px solid var(--border);
+    background: var(--bg2);
+    border-radius: 4px;
+    padding: 12px;
+    min-width: 0;
+  }
+  .review-panel .results-title { margin-bottom: 8px; }
+  .review-stack {
+    display: grid;
+    gap: 12px;
+  }
+  .visual-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .visual-stat {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px;
+  }
+  .visual-stat span {
+    display: block;
+    font-family: var(--mono);
+    font-size: 20px;
+    color: var(--orange);
+    line-height: 1;
+  }
+  .visual-stat label {
+    font-family: var(--condensed);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .visual-bars {
+    display: grid;
+    gap: 8px;
+  }
+  .visual-bar-label {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-bottom: 3px;
+  }
+  .visual-bar-label b { color: var(--text); font-weight: 500; }
+  .visual-bar {
+    height: 7px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .visual-bar i {
+    display: block;
+    height: 100%;
+    border-radius: 4px;
+  }
+  .visual-bar i.risk { background: var(--orange); }
+  .visual-bar i.person { background: var(--green); }
+  .visual-bar i.fire { background: var(--red); }
+  .visual-bar i.smoke { background: #9aa7b4; }
+  .important-frame {
+    display: grid;
+    grid-template-columns: 112px 1fr;
+    gap: 10px;
+    align-items: stretch;
+    border-top: 1px dashed var(--border);
+    padding: 8px 0;
+  }
+  .important-frame:first-child { border-top: none; padding-top: 0; }
+  .frame-tile {
+    position: relative;
+    min-height: 72px;
+    background: #05080b;
+    border: 1px solid var(--border2);
+    border-radius: 4px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text);
+  }
+  .frame-tile img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 0;
+  }
+  .frame-tile.has-image::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, rgba(0,0,0,.08), rgba(0,0,0,.64));
+    z-index: 1;
+  }
+  .frame-tile i {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    background: linear-gradient(0deg, rgba(255,140,0,.48), rgba(255,60,60,.24));
+    z-index: 2;
+  }
+  .frame-tile span { position: relative; z-index: 3; }
+  .frame-label {
+    position: absolute;
+    left: 6px;
+    bottom: 5px;
+    background: rgba(0,0,0,.62);
+    border: 1px solid rgba(255,140,0,.35);
+    border-radius: 3px;
+    padding: 2px 4px;
+  }
+  .frame-detail { min-width: 0; }
+  #review-llm-summary pre,
+  #review-llm-summary .llm-text {
+    font-family: var(--body);
+    font-size: 13px;
+    line-height: 1.65;
+    color: var(--text);
+    text-align: left;
+  }
+  #review-llm-summary .llm-text {
+    max-width: 76ch;
+  }
+  .review-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .review-actions button {
+    background: transparent;
+    border: 1px solid var(--border2);
+    color: var(--text);
+    font-family: var(--condensed);
+    font-size: 12px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 7px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .review-actions button:hover { border-color: var(--orange); color: var(--orange); }
+  @media (max-width: 960px) {
+    .review-grid { grid-template-columns: 1fr; }
+    .review-top { flex-wrap: wrap; }
+    .review-title { flex-basis: 100%; }
+  }
 
   .flagged-card {
     background: var(--bg3);
@@ -780,6 +1026,10 @@
         <button class="btn" id="btn-pause" disabled>
           <div class="btn-icon pause"></div>
           Pause
+        </button>
+        <button class="btn danger" id="btn-stop-scan" disabled>
+          <div class="btn-icon square"></div>
+          Stop Scan
         </button>
         <button class="btn danger" id="btn-reset">
           <div class="btn-icon square"></div>
@@ -906,6 +1156,7 @@
       <div class="insights-header">
         <div class="results-title">Flight Insights</div>
         <span id="insights-status">connecting…</span>
+        <button id="btn-llm-summary" title="Generate scan summary">Summary</button>
         <button id="btn-report" title="Download full JSON report">Report</button>
       </div>
       <div class="insights-tabs">
@@ -924,9 +1175,55 @@
         <span id="cv-pulse"></span>
         <span id="cv-last">CV idle — share phone mirror to begin</span>
       </div>
+      <div class="llm-summary">
+        <div class="results-title" style="margin-bottom:6px">Scan Summary</div>
+        <div id="llm-summary-output" class="ins-empty">Generate after or during a scan.</div>
+      </div>
     </div>
   </div>
 
+</div>
+
+<div id="session-review" class="review-overlay" aria-hidden="true">
+  <div class="review-shell">
+    <div class="review-top">
+      <div class="review-title">Scan Session Report</div>
+      <div id="review-status">Ready</div>
+      <div class="review-actions">
+        <button id="btn-review-report">Download JSON</button>
+        <button id="btn-close-review">Close</button>
+      </div>
+    </div>
+    <div class="review-grid">
+      <div class="review-panel">
+        <div class="results-title">Scan Summary</div>
+        <div id="review-llm-summary" class="ins-empty">Stop a scan to generate the scan summary.</div>
+      </div>
+      <div class="review-stack">
+        <div class="review-panel">
+          <div class="results-title">Operational Metrics</div>
+          <div id="review-visuals"></div>
+          <div id="review-ins-summary"><div class="ins-empty">Waiting for scan data...</div></div>
+        </div>
+        <div class="review-panel">
+          <div class="results-title">Important Frames</div>
+          <div id="review-important-frames"><div class="ins-empty">Waiting for scan data...</div></div>
+        </div>
+        <div class="review-panel">
+          <div class="results-title">Victim Candidates</div>
+          <div id="review-ins-victims"><div class="ins-empty">Waiting for scan data...</div></div>
+        </div>
+        <div class="review-panel">
+          <div class="results-title">Fire / Smoke Events</div>
+          <div id="review-ins-risks"><div class="ins-empty">Waiting for scan data...</div></div>
+        </div>
+        <div class="review-panel">
+          <div class="results-title">Timeline</div>
+          <div id="review-ins-timeline"><div class="ins-empty">Waiting for scan data...</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>

@@ -3,6 +3,7 @@ config();
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
+import { spawn } from 'child_process';
 import fs from 'fs';
 import { promises as fsp } from 'fs';
 import path from 'path';
@@ -65,6 +66,77 @@ function listCollectionStimuli() {
   });
 }
 
+function summarizeTrainingOutput(output) {
+  const lines = output.trim().split(/\r?\n/).filter(Boolean);
+  return lines.slice(-10).join('\n');
+}
+
+function startCollectionTraining(reason = 'manual') {
+  if (trainingJob.state === 'running') {
+    return { ...trainingJob, alreadyRunning: true };
+  }
+
+  const python = process.env.PYTHON || 'python';
+  const modelPath = path.join('models', 'muse_p300_classifier.joblib');
+  const args = [
+    'train_muse_p300_classifier.py',
+    '--sessions',
+    path.join('collection_data', '*.json'),
+    '--model-out',
+    modelPath,
+  ];
+
+  trainingJob = {
+    state: 'running',
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    exitCode: null,
+    modelPath,
+    message: `Training started (${reason}).`,
+    output: '',
+  };
+  broadcast('collection_training', trainingJob);
+
+  const child = spawn(python, args, {
+    cwd: __dirname,
+    windowsHide: true,
+  });
+
+  const appendOutput = (chunk) => {
+    trainingJob.output += chunk.toString();
+    if (trainingJob.output.length > 12000) trainingJob.output = trainingJob.output.slice(-12000);
+  };
+  child.stdout.on('data', appendOutput);
+  child.stderr.on('data', appendOutput);
+  child.on('error', (err) => {
+    trainingJob = {
+      ...trainingJob,
+      state: 'failed',
+      finishedAt: new Date().toISOString(),
+      exitCode: null,
+      message: `Training could not start: ${err.message}`,
+    };
+    broadcast('collection_training', trainingJob);
+  });
+  child.on('close', (code) => {
+    const outputSummary = summarizeTrainingOutput(trainingJob.output);
+    trainingJob = {
+      ...trainingJob,
+      state: code === 0 ? 'complete' : 'failed',
+      finishedAt: new Date().toISOString(),
+      exitCode: code,
+      message: code === 0
+        ? `Training complete. Model saved to ${modelPath}.`
+        : `Training failed. ${outputSummary || 'Check server logs for details.'}`,
+    };
+    console.log(`[Training] ${trainingJob.message}`);
+    if (outputSummary) console.log(outputSummary);
+    broadcast('collection_training', trainingJob);
+  });
+
+  return trainingJob;
+}
+
 // ── Session store ─────────────────────────────────────────────────────────────
 const sessionDetections = [];
 const telemetryLog      = [];
@@ -77,6 +149,15 @@ let cortex           = null;
 let latestMusePacketAt = null;
 let latestMuseBands = null;
 let latestMuseStatusBroadcastAt = 0;
+let trainingJob = {
+  state: 'idle',
+  startedAt: null,
+  finishedAt: null,
+  exitCode: null,
+  modelPath: null,
+  message: 'No training run has started.',
+  output: '',
+};
 
 const COLLECTION_CATEGORIES = {
   'humans in fire': {
@@ -479,14 +560,23 @@ app.post('/api/collection/sessions', async (req, res) => {
   const safeId = String(session.sessionId).replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
   const outPath = path.join(outDir, `${safeId}.json`);
   await fsp.writeFile(outPath, JSON.stringify(saved, null, 2), 'utf8');
+  const training = startCollectionTraining(`saved session ${session.sessionId}`);
 
-  res.json({ ok: true, sessionId: session.sessionId, events: session.events.length, path: outPath });
+  res.json({ ok: true, sessionId: session.sessionId, events: session.events.length, path: outPath, training });
 });
 
 app.get('/api/collection/sessions/:sessionId', (req, res) => {
   const session = collectionSessions.get(req.params.sessionId);
   if (!session) return res.status(404).json({ error: 'Collection session not found in memory' });
   res.json(session);
+});
+
+app.post('/api/collection/train', (_req, res) => {
+  res.json({ ok: true, training: startCollectionTraining('manual request') });
+});
+
+app.get('/api/collection/training-status', (_req, res) => {
+  res.json(trainingJob);
 });
 
 // ── REST: Training data ───────────────────────────────────────────────────────

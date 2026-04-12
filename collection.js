@@ -63,6 +63,7 @@ const state = {
   sessionId: makeSessionId(),
   savedPath: null,
   latestBands: null,
+  training: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -84,6 +85,7 @@ function setMode(mode) {
   $('btn-pause').textContent = mode === 'paused' ? 'Resume' : 'Pause';
   const hasEvents = state.events.length > 0;
   $('btn-save').disabled = !hasEvents;
+  $('btn-train').disabled = !hasEvents || state.training?.state === 'running';
   $('btn-json').disabled = !hasEvents;
   $('btn-csv').disabled = !hasEvents;
 }
@@ -128,6 +130,11 @@ function connectWS() {
     if (msg.type === 'muse_bands') {
       state.latestBands = msg.payload;
       renderBands();
+    }
+    if (msg.type === 'collection_training') {
+      state.training = msg.payload;
+      renderTrainingStatus();
+      setMode(state.mode);
     }
   };
 }
@@ -624,11 +631,49 @@ async function saveSession() {
     if (!res.ok) throw new Error(data.error || `save failed ${res.status}`);
     state.savedPath = data.path;
     logRow(`saved ${data.events} rows`, 'SAVE');
+    if (data.training) {
+      state.training = data.training;
+      renderTrainingStatus();
+      logRow(data.training.message || 'training started', 'TRAIN');
+    }
   } catch (err) {
     logRow(err.message, 'ERR');
   } finally {
     setMode(state.mode);
   }
+}
+
+async function startTraining() {
+  if (!state.events.length) return;
+  $('btn-train').disabled = true;
+  try {
+    if (!state.savedPath) {
+      await saveSession();
+      return;
+    }
+    const res = await fetch('/api/collection/train', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `train failed ${res.status}`);
+    state.training = data.training;
+    renderTrainingStatus();
+    logRow(data.training.message || 'training started', 'TRAIN');
+  } catch (err) {
+    logRow(err.message, 'ERR');
+  } finally {
+    setMode(state.mode);
+  }
+}
+
+function renderTrainingStatus() {
+  const el = $('training-status');
+  if (!el) return;
+  const job = state.training;
+  if (!job) {
+    el.textContent = 'Training waits for saved collection data.';
+    return;
+  }
+  const when = job.finishedAt || job.startedAt || '';
+  el.textContent = `${job.state.toUpperCase()}: ${job.message}${when ? ` | ${when}` : ''}`;
 }
 
 function downloadJson() {
@@ -689,6 +734,7 @@ function resetSession() {
   state.currentIndex = 0;
   state.sessionId = makeSessionId();
   state.savedPath = null;
+  state.training = null;
   $('session-id').textContent = state.sessionId;
   $('stimulus-img').removeAttribute('src');
   showPhase('ready');
@@ -696,6 +742,7 @@ function resetSession() {
   $('current-meta').textContent = 'Each row will align image_id, label, stimulus timestamp, EEG response, and P300 features.';
   updateProgress();
   renderStats();
+  renderTrainingStatus();
   $('event-log').innerHTML = '';
   setMode('idle');
 }
@@ -735,9 +782,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   $('btn-reset').addEventListener('click', resetSession);
   $('btn-save').addEventListener('click', saveSession);
+  $('btn-train').addEventListener('click', startTraining);
   $('btn-json').addEventListener('click', downloadJson);
   $('btn-csv').addEventListener('click', downloadCsv);
 
   setMode('idle');
+  renderTrainingStatus();
   showPhase('ready');
 });

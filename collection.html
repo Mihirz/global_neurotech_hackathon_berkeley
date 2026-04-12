@@ -329,6 +329,19 @@
     line-height: 1.45;
   }
 
+  .status-note {
+    margin-top: 10px;
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    padding: 8px 10px;
+    background: #090a08;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.4;
+    min-height: 34px;
+  }
+
   a { color: var(--fire); }
 </style>
 </head>
@@ -353,9 +366,11 @@
         <button id="btn-pause" disabled>Pause</button>
         <button class="danger" id="btn-reset">Reset Session</button>
         <button id="btn-save" disabled>Save to Server</button>
+        <button id="btn-train" disabled>Train Classifier</button>
         <button id="btn-json" disabled>Download JSON</button>
         <button id="btn-csv" disabled>Download CSV</button>
       </div>
+      <div class="status-note" id="training-status">Training waits for saved collection data.</div>
     </section>
 
     <section>

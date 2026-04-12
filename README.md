@@ -107,8 +107,10 @@ timestamps every stimulus, extracts a -200ms to +800ms EEG epoch from the live
 WebSocket stream, scores the 300-600ms P300 window, and records one row per
 image response.
 
-Use **Save to Server** to write the session JSON under `collection_data/`, or
-download JSON/CSV directly from the browser. In demo mode, synthetic EEG is
+Use **Save to Server** to write the session JSON under `collection_data/`. Saving
+also immediately starts the Muse P300 classifier training job over the saved
+collection JSON files. Use **Train Classifier** to retrigger training manually,
+or download JSON/CSV directly from the browser. In demo mode, synthetic EEG is
 scaled so humans in fire create the strongest P300 response, items in fire create
 a moderate response, and normal items create little or no P300 response.
 
@@ -139,8 +141,10 @@ Use **Save to Server** or **Download JSON/CSV** after collection. The saved JSON
 contains the label, image ID, stimulus timestamp, P300 features, Muse bandpower
 features, channel names, and rejection reason if an epoch was noisy.
 
-Train the starter model with `python train_muse_p300_classifier.py --sessions
-"collection_data/*.json"` after collecting enough trials.
+The server starts training automatically after each save and writes
+`models/muse_p300_classifier.joblib` when there is enough labeled data. The same
+trainer can still be run manually with `python train_muse_p300_classifier.py
+--sessions "collection_data/*.json"`.
 
 ---
 

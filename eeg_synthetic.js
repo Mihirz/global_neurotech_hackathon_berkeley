@@ -624,7 +624,7 @@ export class SyntheticEEGStream {
     const BATCH_SIZE = 4;
     const packetMs   = (BATCH_SIZE / SAMPLE_RATE) * 1000; // ~31.25ms
 
-    this.onStatus('Synthetic EEG — 128Hz · N170/VPP calibrated · controller artifacts active');
+    this.onStatus('Synthetic EEG — 128Hz · person-target response calibrated · controller artifacts active');
 
     this._interval = setInterval(() => {
       const packetStart = this._t;

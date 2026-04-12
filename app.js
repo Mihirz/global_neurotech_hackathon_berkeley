@@ -116,6 +116,11 @@ async function captureScreenAsDroneFeed() {
   }
 }
 
+function hasLiveDroneVideo() {
+  const video = document.getElementById('drone-video');
+  return !!state.droneUrl && video && video.readyState >= 2 && video.videoWidth > 0;
+}
+
 // Demo: sample from a static video element or canvas pattern
 function sampleDroneFrame() {
   const video = document.getElementById('drone-video');
@@ -187,8 +192,12 @@ function startRSVP() {
     const ts = performance.timeOrigin + performance.now();
     const frameId = state.frameId++;
 
-    // Display in RSVP window
-    document.getElementById('rsvp-img').src = imgSrc;
+    // Display sampled RSVP frames only in simulated mode. With a real shared
+    // phone feed, keep the live video visible so Chrome screen capture does not
+    // show a copied/recursive frame on top of the source feed.
+    if (!hasLiveDroneVideo()) {
+      document.getElementById('rsvp-img').src = imgSrc;
+    }
     document.getElementById('frame-counter').textContent = `F${String(frameId).padStart(4,'0')}`;
 
     const stimulus = { frameId, ts, imgSrc, score: null, isP300: false };
@@ -211,7 +220,7 @@ function startRSVP() {
         if (d[i] > 150 && d[i+1] > 80 && d[i+2] < 80) warmPx++;
       }
       if (warmPx > 20) {
-        wsSend('sim_frame_onset', { ts });
+        wsSend('sim_frame_onset', { ts, isTarget: true });
       }
     }
   }, intervalMs);
@@ -311,7 +320,7 @@ async function runCalibration() {
     document.getElementById('cal-label').textContent = `Calibrating ${i+1}/${images.length}`;
 
     // In demo mode, trigger simulated P300 for targets
-    if (state.isDemo && img.isTarget) wsSend('sim_frame_onset', { ts });
+    if (state.isDemo && img.isTarget) wsSend('sim_frame_onset', { ts, isTarget: true });
 
     await sleep(CAL_ISI_MS);
 
@@ -468,9 +477,12 @@ function setMode(mode) {
 
   const container = document.getElementById('rsvp-container');
   const hasVideo  = !!state.droneUrl;
-  if (mode === 'scanning' || mode === 'calibrating') {
+  if (mode === 'calibrating') {
     container.classList.add('show-rsvp');
     container.classList.remove('show-video');
+  } else if (mode === 'scanning') {
+    container.classList.toggle('show-rsvp', !hasLiveDroneVideo());
+    container.classList.toggle('show-video', hasLiveDroneVideo());
   } else {
     container.classList.remove('show-rsvp');
     if (hasVideo) container.classList.add('show-video');
@@ -587,12 +599,16 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!el) return;
       el.classList.add('active');
       setTimeout(() => el.classList.remove('active'), 250);
+      const cvLast = document.getElementById('cv-last');
+      if (!cvLast) return;
       if (r && (r.persons_count > 0 || r.fire || r.smoke)) {
         const parts = [];
-        if (r.persons_count) parts.push(`${r.persons_count} person`);
+        if (r.persons_count) parts.push(`${r.persons_count} person candidate${r.persons_count === 1 ? '' : 's'}`);
         if (r.fire)  parts.push('fire');
         if (r.smoke) parts.push('smoke');
-        document.getElementById('cv-last').textContent = parts.join(' · ');
+        cvLast.textContent = parts.join(' · ');
+      } else if (r && cvLast) {
+        cvLast.textContent = `clear frame · ${r.session_size} sampled`;
       }
     },
   });

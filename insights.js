@@ -35,13 +35,17 @@ function renderSummary(container, s) {
       <div><span>${v(s.victims_count)}</span><label>Victims</label></div>
       <div><span>${v(s.critical_victims)}</span><label>Critical</label></div>
       <div><span>${v(s.eeg_corroborated_victims)}</span><label>EEG-verified</label></div>
+      <div><span>${v(s.risk_score, 0)}</span><label>Risk /100</label></div>
       <div><span>${v(s.peak_simultaneous_persons)}</span><label>Peak</label></div>
+      <div><span>${v(s.person_frames)}</span><label>Person fr.</label></div>
       <div><span>${v(s.fire_events)}</span><label>Fire evt</label></div>
       <div><span>${v(s.smoke_events)}</span><label>Smoke evt</label></div>
       <div><span>${v(s.fire_coverage_pct, 1)}%</span><label>Fire %</label></div>
       <div><span>${v(s.smoke_coverage_pct, 1)}%</span><label>Smoke %</label></div>
+      <div><span>${v(s.max_fire_severity != null ? s.max_fire_severity * 100 : null, 1)}%</span><label>Peak fire</label></div>
       <div><span>${v(s.avg_confidence != null ? s.avg_confidence * 100 : null, 0)}%</span><label>Avg conf</label></div>
       <div><span>${v(s.detections_per_min, 1)}</span><label>Det/min</label></div>
+      <div><span>${v(s.observed_fps, 1)}</span><label>CV fps</label></div>
       <div><span>${v(s.coverage_diagonal_m, 0)}m</span><label>Coverage</label></div>
       <div><span>${tsl == null ? '—' : tsl.toFixed(0) + 's'}</span><label>Since last</label></div>
       <div><span>${v(s.total_frames)}</span><label>Frames</label></div>

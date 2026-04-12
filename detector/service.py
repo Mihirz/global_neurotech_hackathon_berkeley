@@ -16,6 +16,7 @@ import io
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -51,18 +52,20 @@ RELEVANT_COCO = {
 VICTIM_CLASSES = {"person"}
 
 # Person-detection filters tuned for aerial / drone context.
-MIN_PERSON_CONF      = 0.30
-MIN_PERSON_AREA_FRAC = 0.0015   # ≥ 0.15% of frame area
-MIN_PERSON_ASPECT    = 0.6      # box h/w — persons are taller than wide (even prone → 0.6+)
-MAX_PERSON_ASPECT    = 5.0
+MIN_PERSON_CONF      = 0.32
+MIN_PERSON_AREA_FRAC = 0.0007   # allow smaller aerial victims; clusters handle false positives
+MIN_PERSON_ASPECT    = 0.35     # prone/crouched victims can be wider than upright people
+MAX_PERSON_ASPECT    = 6.5
+MIN_VICTIM_TRACK_HITS = 2
 
 _model: YOLO | None = None
+MODEL_PATH = Path(__file__).resolve().parent.parent / "yolov8s.pt"
 
 
 def get_model() -> YOLO:
     global _model
     if _model is None:
-        _model = YOLO("yolov8s.pt")
+        _model = YOLO(str(MODEL_PATH))
     return _model
 
 
@@ -112,6 +115,15 @@ def decode_image(data_url_or_b64: str) -> np.ndarray:
 
 # ── Fire / smoke with HSV + connected components ─────────────────────────────
 
+def _component_touch_count(x: int, y: int, w: int, h: int, img_w: int, img_h: int) -> int:
+    pad = max(3, int(min(img_w, img_h) * 0.01))
+    return int(x <= pad) + int(y <= pad) + int(x + w >= img_w - pad) + int(y + h >= img_h - pad)
+
+
+def _component_texture(gray: np.ndarray, mask: np.ndarray) -> float:
+    vals = gray[mask]
+    return float(vals.std()) if vals.size else 0.0
+
 def detect_fire_smoke(rgb: np.ndarray) -> tuple[dict, dict]:
     """
     Real-flame detection:
@@ -130,6 +142,7 @@ def detect_fire_smoke(rgb: np.ndarray) -> tuple[dict, dict]:
     total = float(h * w)
     bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     H, S, V = cv2.split(hsv)
 
     # Flame color mask: red–orange (hue 0-25) or wrapped red (170-179)
@@ -146,6 +159,7 @@ def detect_fire_smoke(rgb: np.ndarray) -> tuple[dict, dict]:
     num_f, labels_f, stats_f, _ = cv2.connectedComponentsWithStats(flame_mask, 8)
     fire_boxes: list[list[int]] = []
     fire_px = 0
+    fire_scores: list[float] = []
     min_region = max(120, int(total * 0.0008))  # at least ~0.08% of frame per region
     for i in range(1, num_f):
         area = stats_f[i, cv2.CC_STAT_AREA]
@@ -155,15 +169,35 @@ def detect_fire_smoke(rgb: np.ndarray) -> tuple[dict, dict]:
         y1 = int(stats_f[i, cv2.CC_STAT_TOP])
         bw = int(stats_f[i, cv2.CC_STAT_WIDTH])
         bh = int(stats_f[i, cv2.CC_STAT_HEIGHT])
+        bbox_area = max(1, bw * bh)
+        extent = float(area / bbox_area)
+        aspect = bw / max(1, bh)
+        comp_mask = labels_f == i
+        hue_std = float(H[comp_mask].std()) if area else 0.0
+        val_std = float(V[comp_mask].std()) if area else 0.0
+        texture = _component_texture(gray, comp_mask)
+        touches = _component_touch_count(x1, y1, bw, bh, w, h)
+
+        # Bright app banners, warning labels, and UI accents tend to be solid,
+        # rectangular, and low-texture. Flame blobs are irregular and textured.
+        ui_like_rect = extent > 0.78 and (aspect > 2.4 or aspect < 0.42) and texture < 18
+        flat_color = hue_std < 3.0 and val_std < 10.0 and texture < 12.0
+        edge_badge = touches >= 2 and extent > 0.72 and texture < 18
+        if ui_like_rect or flat_color or edge_badge:
+            continue
+
         fire_boxes.append([x1, y1, x1 + bw, y1 + bh])
         fire_px += int(area)
+        fire_scores.append(min(1.0, (area / total) * 55 + texture / 95))
 
     fire_frac = fire_px / total
+    fire_conf = max(fire_scores, default=0.0)
     fire = {
-        "detected": fire_frac > 0.003 and len(fire_boxes) > 0,
+        "detected": fire_frac > 0.0025 and fire_conf >= 0.20 and len(fire_boxes) > 0,
         "area_frac": round(float(fire_frac), 4),
         "boxes": fire_boxes[:6],
         "intensity": round(float(V[flame_mask > 0].mean() / 255.0) if fire_px else 0.0, 3),
+        "confidence": round(float(fire_conf), 3),
     }
 
     # Smoke: low saturation, mid-high value, coherent region
@@ -174,6 +208,7 @@ def detect_fire_smoke(rgb: np.ndarray) -> tuple[dict, dict]:
     num_s, labels_s, stats_s, _ = cv2.connectedComponentsWithStats(smoke_mask, 8)
     smoke_area = 0
     smoke_boxes: list[list[int]] = []
+    smoke_scores: list[float] = []
     min_smoke = int(total * 0.03)
     for i in range(1, num_s):
         area = stats_s[i, cv2.CC_STAT_AREA]
@@ -183,13 +218,33 @@ def detect_fire_smoke(rgb: np.ndarray) -> tuple[dict, dict]:
         y1 = int(stats_s[i, cv2.CC_STAT_TOP])
         bw = int(stats_s[i, cv2.CC_STAT_WIDTH])
         bh = int(stats_s[i, cv2.CC_STAT_HEIGHT])
+        bbox_area = max(1, bw * bh)
+        extent = float(area / bbox_area)
+        comp_mask = labels_s == i
+        gray_std = _component_texture(gray, comp_mask)
+        val_mean = float(V[comp_mask].mean()) if area else 0.0
+        touches = _component_touch_count(x1, y1, bw, bh, w, h)
+
+        # Reject flat grey UI panels / clear sky. Smoke is diffuse, but it still
+        # has rolling brightness variation and rarely fills a perfect rectangle.
+        if gray_std < 10.0:
+            continue
+        if extent > 0.88 and gray_std < 18.0:
+            continue
+        if touches >= 3 and area / total > 0.45:
+            continue
+        if val_mean > 225:
+            continue
+
         smoke_boxes.append([x1, y1, x1 + bw, y1 + bh])
         smoke_area += int(area)
+        smoke_scores.append(min(1.0, (area / total) * 4 + gray_std / 80))
 
     smoke_frac = smoke_area / total
+    smoke_conf = max(smoke_scores, default=0.0)
     # Guard against uniform bright skies triggering smoke — require the masked
     # region to actually have mid-range brightness variability.
-    smoke_valid = smoke_frac > 0.10 and fire_frac < 0.08
+    smoke_valid = smoke_frac > 0.12 and smoke_conf >= 0.22 and fire_frac < 0.08
     if smoke_valid:
         v_in = V[smoke_mask > 0]
         if len(v_in) > 0 and (v_in.std() < 8 or v_in.mean() > 230):
@@ -200,6 +255,7 @@ def detect_fire_smoke(rgb: np.ndarray) -> tuple[dict, dict]:
         "detected": smoke_valid,
         "area_frac": round(float(smoke_frac), 4),
         "boxes": smoke_boxes[:4],
+        "confidence": round(float(smoke_conf), 3),
     }
     return fire, smoke
 
@@ -237,6 +293,8 @@ def run_yolo(rgb: np.ndarray) -> tuple[list[dict], list[dict]]:
 
         if label in VICTIM_CLASSES:
             # Reject tiny blips, UI thumbnails, and clearly non-person aspect.
+            # Final rescue-target confirmation happens across frames in
+            # _cluster_victims so distant aerial people can still pass here.
             if conf < MIN_PERSON_CONF: continue
             if area_frac < MIN_PERSON_AREA_FRAC: continue
             if aspect < MIN_PERSON_ASPECT or aspect > MAX_PERSON_ASPECT: continue
@@ -336,13 +394,22 @@ def ingest(req: IngestRequest):
 
 @app.post("/eeg-hit")
 def eeg_hit(hit: EEGHit):
-    session.eeg_hits.append(hit.model_dump())
+    hit_data = hit.model_dump() if hasattr(hit, "model_dump") else hit.dict()
+    session.eeg_hits.append(hit_data)
+    matched = False
     for f in session.frames[-200:]:
         if f.frame_id == hit.frame_id:
             f.eeg_flagged = True
             f.eeg_amplitude = hit.amplitude
             f.eeg_score = hit.score
+            matched = True
             break
+    if not matched and session.frames:
+        nearest = min(session.frames[-200:], key=lambda f: abs(f.ts - hit.ts))
+        if abs(nearest.ts - hit.ts) <= 750:
+            nearest.eeg_flagged = True
+            nearest.eeg_amplitude = hit.amplitude
+            nearest.eeg_score = hit.score
     return {"ok": True, "total_eeg_hits": len(session.eeg_hits)}
 
 
@@ -447,6 +514,8 @@ def _cluster_victims(frames: list[FrameRecord]) -> list[dict]:
             eeg_support = sum(1 for t in track if t["eeg_flagged"])
             max_conf = max(confs)
             avg_conf = sum(confs) / len(confs)
+            if len(track) < MIN_VICTIM_TRACK_HITS and max_conf < 0.68 and eeg_support == 0:
+                continue
             priority = min(1.0, (0.4 + 0.6 * max_conf) * (1 + 0.4 * min(eeg_support, 3) / 3))
             avg_area = sum(t["area_frac"] for t in track) / len(track)
             first = track[0]; last = track[-1]
@@ -472,6 +541,15 @@ def _cluster_victims(frames: list[FrameRecord]) -> list[dict]:
 def _fire_events(frames: list[FrameRecord]) -> list[dict]:
     events: list[dict] = []
     current: dict | None = None
+
+    def flush_current():
+        if not current:
+            return
+        # One-frame UI flashes should not become dispatch-level events unless
+        # the region is large enough to be operationally obvious.
+        if current["frame_count"] >= 2 or current["max_severity"] >= 0.08:
+            events.append(current.copy())
+
     for f in frames:
         hot = f.fire["detected"] or f.smoke["detected"]
         if hot:
@@ -486,8 +564,7 @@ def _fire_events(frames: list[FrameRecord]) -> list[dict]:
                 if f.gps and not current.get("gps"):
                     current["gps"] = f.gps
             else:
-                if current:
-                    events.append(current)
+                flush_current()
                 current = {
                     "kind": kind,
                     "first_ts": f.ts,
@@ -498,8 +575,7 @@ def _fire_events(frames: list[FrameRecord]) -> list[dict]:
                     "frame_count": 1,
                     "gps": f.gps,
                 }
-    if current:
-        events.append(current)
+    flush_current()
     for ev in events:
         ev["max_severity"] = round(ev["max_severity"], 4)
         # Duration estimate from frame count (ingest runs ~2 Hz)
@@ -562,6 +638,10 @@ def _flight_stats(frames: list[FrameRecord], victims: list[dict], risks: list[di
     fire_frames     = sum(1 for f in frames if f.fire["detected"])
     smoke_frames    = sum(1 for f in frames if f.smoke["detected"])
     vehicle_frames  = sum(1 for f in frames if any(o["class"] in ("car","truck","bus","motorcycle","bicycle") for o in f.other_objects))
+    risk_frames     = sum(1 for f in frames if f.fire["detected"] or f.smoke["detected"])
+    clear_frames    = total - risk_frames
+    max_fire_sev    = max((f.fire["area_frac"] for f in frames if f.fire["detected"]), default=0.0)
+    max_smoke_sev   = max((f.smoke["area_frac"] for f in frames if f.smoke["detected"]), default=0.0)
 
     all_persons = [p for f in frames for p in f.persons]
     avg_conf = (sum(p["conf"] for p in all_persons) / len(all_persons)) if all_persons else 0.0
@@ -593,6 +673,9 @@ def _flight_stats(frames: list[FrameRecord], victims: list[dict], risks: list[di
 
     critical = sum(1 for v in victims if v["priority"] >= 0.8)
     high     = sum(1 for v in victims if 0.5 <= v["priority"] < 0.8)
+    top_risk = max([v["priority"] for v in victims] + [min(1.0, r["max_severity"] * 12) for r in risks] + [0.0])
+    risk_score = round(min(100.0, top_risk * 65 + critical * 20 + high * 10 + len(risks) * 6), 1)
+    fps_observed = total / duration_s if duration_s > 0 else 0.0
 
     return {
         "total_frames": total,
@@ -601,12 +684,17 @@ def _flight_stats(frames: list[FrameRecord], victims: list[dict], risks: list[di
         "vehicle_frames": vehicle_frames,
         "fire_frames": fire_frames,
         "smoke_frames": smoke_frames,
+        "risk_frames": risk_frames,
+        "clear_frames": clear_frames,
         "victims_count": len(victims),
         "critical_victims": critical,
         "high_priority_victims": high,
         "eeg_corroborated_victims": sum(1 for v in victims if v["eeg_corroborations"] > 0),
         "fire_events": len([r for r in risks if r["kind"] == "fire"]),
         "smoke_events": len([r for r in risks if r["kind"] == "smoke"]),
+        "max_fire_severity": round(max_fire_sev, 4),
+        "max_smoke_severity": round(max_smoke_sev, 4),
+        "risk_score": risk_score,
         "avg_confidence": round(avg_conf, 3),
         "peak_simultaneous_persons": peak,
         "avg_persons_per_frame": round(avg_per_frame, 2),
@@ -614,6 +702,7 @@ def _flight_stats(frames: list[FrameRecord], victims: list[dict], risks: list[di
         "fire_coverage_pct": round(100 * fire_frames / total, 1),
         "smoke_coverage_pct": round(100 * smoke_frames / total, 1),
         "detections_per_min": round(len(all_persons) / (duration_s / 60.0), 1) if duration_s > 0 else 0,
+        "observed_fps": round(fps_observed, 2),
         "gps_bbox": bbox,
         "coverage_diagonal_m": round(coverage_m, 1),
         "time_since_last_victim_s": time_since_last_victim,
@@ -636,13 +725,20 @@ def insights():
             f"{stats['duration_s']:.0f}s"
             + (f" — {stats['critical_victims']} CRITICAL, {stats['high_priority_victims']} HIGH." if stats['victims_count'] else ".")
         )
+        lines.append(
+            f"Scan quality: {stats['observed_fps']:.1f} fps observed, "
+            f"{stats['person_frames']} person-candidate frame(s), risk score {stats['risk_score']:.0f}/100."
+        )
         if stats["eeg_corroborated_victims"]:
             lines.append(f"{stats['eeg_corroborated_victims']} corroborated by firefighter P300.")
         if stats["fire_events"] or stats["smoke_events"]:
             lines.append(
                 f"{stats['fire_events']} fire event(s) ({stats['fire_coverage_pct']}% of flight), "
-                f"{stats['smoke_events']} smoke event(s) ({stats['smoke_coverage_pct']}% of flight)."
+                f"{stats['smoke_events']} smoke event(s) ({stats['smoke_coverage_pct']}% of flight); "
+                f"peak fire {stats['max_fire_severity']*100:.1f}%, peak smoke {stats['max_smoke_severity']*100:.1f}%."
             )
+        elif stats["person_frames"] == 0:
+            lines.append("No persistent person or hazard tracks yet; continue a slow orbit and keep the camera clear of app UI overlays.")
         if stats["peak_simultaneous_persons"]:
             lines.append(
                 f"Peak {stats['peak_simultaneous_persons']} simultaneous persons, "

@@ -95,8 +95,10 @@ wss.on('connection', (ws) => {
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw);
-      if (msg.type === 'sim_frame_onset' && syntheticStream)
-        syntheticStream.notifyFrameOnset(msg.ts, msg.isFace ?? false);
+      if (msg.type === 'sim_frame_onset' && syntheticStream) {
+        const isTarget = msg.isTarget ?? msg.containsPerson ?? msg.isFace ?? false;
+        syntheticStream.notifyFrameOnset(msg.ts, isTarget);
+      }
       if (msg.type === 'ping') ws.send(JSON.stringify({ type: 'pong', ts: Date.now() }));
     } catch {}
   });

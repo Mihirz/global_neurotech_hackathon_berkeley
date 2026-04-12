@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NeuroRSVP — Firefighter BCI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* ── Reset & Root ─────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #080c10;
+    --bg2:       #0d1218;
+    --bg3:       #111820;
+    --panel:     #131c25;
+    --border:    rgba(255,140,0,0.15);
+    --border2:   rgba(255,140,0,0.3);
+    --orange:    #ff8c00;
+    --orange-d:  #cc6f00;
+    --red:       #ff3c3c;
+    --green:     #39e97b;
+    --blue:      #4da6ff;
+    --text:      #c8d4e0;
+    --text-dim:  #5a7080;
+    --mono:      'Share Tech Mono', monospace;
+    --condensed: 'Barlow Condensed', sans-serif;
+    --body:      'Barlow', sans-serif;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--body);
+    font-size: 14px;
+    line-height: 1.5;
+    overflow: hidden;
+  }
+
+  /* ── Layout ───────────────────────────────────────────── */
+  .app {
+    display: grid;
+    grid-template-rows: 44px 1fr;
+    grid-template-columns: 280px 1fr 300px;
+    height: 100vh;
+    gap: 0;
+  }
+
+  /* ── Header ───────────────────────────────────────────── */
+  header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 0 16px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .logo {
+    font-family: var(--condensed);
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--orange);
+  }
+
+  .logo span { color: var(--text-dim); font-weight: 400; }
+
+  .status-pills {
+    display: flex;
+    gap: 10px;
+    flex: 1;
+  }
+
+  .pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--bg3);
+  }
+
+  .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: #444;
+    flex-shrink: 0;
+  }
+  .dot[data-state="green"]  { background: var(--green); box-shadow: 0 0 5px var(--green); }
+  .dot[data-state="amber"]  { background: var(--orange); }
+  .dot[data-state="red"]    { background: var(--red); }
+
+  #demo-badge {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--orange);
+    background: rgba(255,140,0,0.08);
+    border: 1px solid rgba(255,140,0,0.3);
+    padding: 3px 10px;
+    border-radius: 3px;
+    letter-spacing: .08em;
+  }
+
+  #mode-label {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--orange);
+    margin-left: auto;
+    letter-spacing: .1em;
+  }
+
+  /* ── Left Panel — Controls ────────────────────────────── */
+  .left-panel {
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    overflow-y: auto;
+  }
+
+  .panel-section {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section-title {
+    font-family: var(--condensed);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+  }
+
+  /* Buttons */
+  .btn-row { display: flex; flex-direction: column; gap: 8px; }
+
+  .btn {
+    font-family: var(--condensed);
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 9px 14px;
+    border: 1px solid var(--border2);
+    border-radius: 3px;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    transition: all .15s;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn:hover:not(:disabled) {
+    background: rgba(255,140,0,0.08);
+    border-color: var(--orange);
+    color: var(--orange);
+  }
+
+  .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  .btn.primary {
+    background: rgba(255,140,0,0.12);
+    border-color: var(--orange);
+    color: var(--orange);
+  }
+
+  .btn.primary:hover:not(:disabled) {
+    background: rgba(255,140,0,0.22);
+  }
+
+  .btn.danger { border-color: rgba(255,60,60,0.4); color: #ff8888; }
+  .btn.danger:hover:not(:disabled) {
+    background: rgba(255,60,60,0.1);
+    border-color: var(--red);
+    color: var(--red);
+  }
+
+  .btn-icon {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+  }
+  .btn-icon.square { border-radius: 2px; }
+  .btn-icon.pause {
+    background: none;
+    border-left: 3px solid currentColor;
+    border-right: 3px solid currentColor;
+    height: 11px;
+    width: 8px;
+    border-radius: 0;
+  }
+
+  /* Sliders */
+  .slider-row {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .slider-label {
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .slider-label span:last-child { color: var(--orange); }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 3px;
+    background: var(--border2);
+    border-radius: 2px;
+    outline: none;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: var(--orange);
+    cursor: pointer;
+    border: none;
+  }
+
+  /* Metrics */
+  .metric-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .metric {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 10px;
+  }
+
+  .metric-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+  }
+
+  .metric-value {
+    font-family: var(--mono);
+    font-size: 18px;
+    color: var(--orange);
+    line-height: 1;
+  }
+
+  .metric-value.large { font-size: 24px; }
+
+  /* P300 bar */
+  .signal-bar-wrap {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    height: 8px;
+    margin-top: 8px;
+    overflow: hidden;
+  }
+
+  #p300-bar-fill {
+    height: 100%;
+    background: var(--orange);
+    width: 0%;
+    transition: width .1s ease;
+  }
+
+  /* Calibration */
+  #cal-progress { display: none; margin-top: 8px; }
+
+  .cal-bar-wrap {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    height: 6px;
+    overflow: hidden;
+    margin-top: 6px;
+  }
+
+  #cal-bar-fill {
+    height: 100%;
+    background: var(--blue);
+    width: 0%;
+    transition: width .3s ease;
+  }
+
+  #cal-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+
+  canvas.cal-canvas {
+    width: 100%;
+    height: 80px;
+    display: block;
+    margin-top: 8px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+  }
+
+  /* Log */
+  #log {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 14px;
+    line-height: 1.7;
+  }
+
+  #log div:last-child { color: var(--text); }
+
+  /* ── Center Panel ─────────────────────────────────────── */
+  .center-panel {
+    display: grid;
+    grid-template-rows: 1fr 120px;
+    overflow: hidden;
+  }
+
+  /* RSVP viewport */
+  .rsvp-wrap {
+    position: relative;
+    background: #000;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #rsvp-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #rsvp-container.flash::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(255,60,60,0.25);
+    pointer-events: none;
+    animation: flash-anim .3s ease forwards;
+  }
+
+  @keyframes flash-anim {
+    0%   { opacity: 1; }
+    100% { opacity: 0; }
+  }
+
+  #rsvp-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    image-rendering: pixelated;
+    display: block;
+  }
+
+  #drone-video {
+    display: none;
+    max-width: 100%;
+    max-height: 100%;
+  }
+
+  #no-feed {
+    text-align: center;
+    color: var(--text-dim);
+  }
+
+  #no-feed p {
+    font-family: var(--mono);
+    font-size: 11px;
+    margin-top: 8px;
+    color: var(--text-dim);
+  }
+
+  .rsvp-hud {
+    position: absolute;
+    top: 10px; left: 10px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--orange);
+    background: rgba(0,0,0,0.6);
+    padding: 4px 8px;
+    border-radius: 2px;
+    border: 1px solid rgba(255,140,0,0.3);
+    pointer-events: none;
+  }
+
+  #frame-counter {
+    position: absolute;
+    bottom: 10px; right: 10px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: rgba(255,140,0,0.5);
+    pointer-events: none;
+  }
+
+  /* EEG waveform strip */
+  .eeg-strip {
+    background: var(--bg2);
+    border-top: 1px solid var(--border);
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .eeg-strip-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: .08em;
+  }
+
+  #eeg-plot {
+    width: 100%;
+    height: 72px;
+    display: block;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+  }
+
+  /* ── Right Panel — Results ────────────────────────────── */
+  .right-panel {
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .results-header {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .results-title {
+    font-family: var(--condensed);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  #detection-count {
+    font-family: var(--mono);
+    font-size: 20px;
+    color: var(--red);
+  }
+
+  #flagged-grid {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    align-content: start;
+  }
+
+  .flagged-card {
+    background: var(--bg3);
+    border: 1px solid rgba(255,60,60,0.3);
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform .15s, border-color .15s;
+  }
+
+  .flagged-card:hover {
+    border-color: var(--red);
+    transform: scale(1.02);
+  }
+
+  .flagged-card.new {
+    animation: card-appear .3s ease forwards;
+    border-color: var(--red);
+    box-shadow: 0 0 10px rgba(255,60,60,0.3);
+  }
+
+  @keyframes card-appear {
+    from { opacity: 0; transform: scale(0.9); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+
+  .flagged-card img {
+    width: 100%;
+    height: 80px;
+    object-fit: cover;
+    display: block;
+  }
+
+  .flagged-info {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 6px;
+  }
+
+  .flagged-id {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text-dim);
+  }
+
+  .flagged-amp {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--red);
+    font-weight: 500;
+  }
+
+  /* canvas hidden but needed for frame capture */
+  #frame-canvas { display: none; }
+
+  /* scrollbars */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+</style>
+</head>
+<body>
+<canvas id="frame-canvas"></canvas>
+
+<div class="app">
+
+  <!-- ── Header ── -->
+  <header>
+    <div class="logo">NeuroRSVP <span>// Firefighter BCI</span></div>
+
+    <div class="status-pills">
+      <div class="pill">
+        <div class="dot" id="ws-dot" data-state="red"></div>
+        <span>SERVER</span>
+      </div>
+      <div class="pill">
+        <div class="dot" id="eeg-dot" data-state="red"></div>
+        <span id="crown-status">Connecting...</span>
+      </div>
+    </div>
+
+    <div id="demo-badge">DEMO MODE</div>
+    <div id="mode-label">IDLE</div>
+  </header>
+
+  <!-- ── Left Panel ── -->
+  <div class="left-panel">
+
+    <!-- Operations -->
+    <div class="panel-section">
+      <div class="section-title">Operations</div>
+      <div class="btn-row">
+        <button class="btn" id="btn-cal">
+          <div class="btn-icon" style="border-radius:2px;background:var(--blue);width:10px;height:10px"></div>
+          Calibrate Crown
+        </button>
+        <button class="btn primary" id="btn-scan" disabled>
+          <div class="btn-icon"></div>
+          Begin Scan
+        </button>
+        <button class="btn" id="btn-pause" disabled>
+          <div class="btn-icon pause"></div>
+          Pause
+        </button>
+        <button class="btn danger" id="btn-reset">
+          <div class="btn-icon square"></div>
+          Reset Session
+        </button>
+      </div>
+    </div>
+
+    <!-- Parameters -->
+    <div class="panel-section">
+      <div class="section-title">Parameters</div>
+      <div class="slider-row">
+        <div class="slider-label">
+          <span>Presentation rate</span>
+          <span id="rate-val">8 Hz</span>
+        </div>
+        <input type="range" id="rate-slider" min="4" max="16" value="8" step="1">
+
+        <div class="slider-label">
+          <span>P300 threshold</span>
+          <span id="threshold-val">3.0 µV</span>
+        </div>
+        <input type="range" id="threshold-slider" min="1.0" max="10.0" value="3.0" step="0.5">
+      </div>
+    </div>
+
+    <!-- Signal quality -->
+    <div class="panel-section">
+      <div class="section-title">Signal</div>
+
+      <div class="metric-grid">
+        <div class="metric">
+          <div class="metric-label">P300 score</div>
+          <div class="metric-value" id="p300-score">0.00</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Threshold</div>
+          <div class="metric-value" id="threshold-display">3.0µV</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">P300 peak</div>
+          <div class="metric-value" id="p300-peak-val">—</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Detections</div>
+          <div class="metric-value large" id="detection-count-left">0</div>
+        </div>
+      </div>
+
+      <div class="signal-bar-wrap">
+        <div id="p300-bar-fill"></div>
+      </div>
+    </div>
+
+    <!-- Calibration plot -->
+    <div class="panel-section">
+      <div class="section-title">Calibration</div>
+
+      <div id="cal-progress">
+        <div id="cal-label" style="font-family:var(--mono);font-size:10px;color:var(--text-dim)">Ready</div>
+        <div class="cal-bar-wrap">
+          <div id="cal-bar-fill"></div>
+        </div>
+      </div>
+
+      <canvas id="cal-plot" class="cal-canvas" width="248" height="80"></canvas>
+    </div>
+
+    <!-- Log -->
+    <div style="flex:1;display:flex;flex-direction:column;min-height:80px;border-bottom:1px solid var(--border)">
+      <div class="panel-section" style="border-bottom:none;padding-bottom:4px">
+        <div class="section-title">Event log</div>
+      </div>
+      <div id="log"></div>
+    </div>
+
+  </div>
+
+  <!-- ── Center Panel ── -->
+  <div class="center-panel">
+
+    <!-- RSVP Viewport -->
+    <div class="rsvp-wrap">
+      <div id="rsvp-container">
+        <img id="rsvp-img" alt="RSVP frame" src="">
+        <video id="drone-video" autoplay muted playsinline></video>
+
+        <div id="no-feed">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="4" y="12" width="40" height="26" rx="3" stroke="rgba(255,140,0,0.3)" stroke-width="1.5"/>
+            <circle cx="24" cy="25" r="8" stroke="rgba(255,140,0,0.3)" stroke-width="1.5"/>
+            <circle cx="24" cy="25" r="3" fill="rgba(255,140,0,0.2)"/>
+            <line x1="4" y1="44" x2="44" y2="4" stroke="rgba(255,60,60,0.3)" stroke-width="1.5"/>
+          </svg>
+          <p>No drone feed<br>Running simulated thermal frames</p>
+        </div>
+
+        <div class="rsvp-hud">RSVP LIVE</div>
+        <span id="frame-counter">F0000</span>
+      </div>
+    </div>
+
+    <!-- EEG Strip -->
+    <div class="eeg-strip">
+      <div class="eeg-strip-label">PO3 + PO4 — PARIETAL CHANNEL AVERAGE (µV) — 2s WINDOW</div>
+      <canvas id="eeg-plot" width="600" height="72"></canvas>
+    </div>
+
+  </div>
+
+  <!-- ── Right Panel ── -->
+  <div class="right-panel">
+    <div class="results-header">
+      <div class="results-title">P300 Detections</div>
+      <div id="detection-count">0</div>
+    </div>
+    <div id="flagged-grid"></div>
+  </div>
+
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

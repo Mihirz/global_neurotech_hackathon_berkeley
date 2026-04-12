@@ -3,7 +3,6 @@ const POST_MS = 800;
 const P300_START_MS = 300;
 const P300_END_MS = 600;
 const ARTIFACT_WARN_UV = 100;
-const ARTIFACT_REJECT_UV = 5000;
 const BANDS = {
   delta: [1, 4],
   theta: [4, 8],
@@ -329,12 +328,19 @@ function extractEpoch(stimulusTs) {
   const samples = state.buffer.window(stimulusTs - PRE_MS, stimulusTs + POST_MS);
   const expected = Math.round((PRE_MS + POST_MS) / 1000 * state.buffer.sampleRate);
   if (samples.length < expected * 0.60) {
-    return { rejected: true, rejectReason: `too few samples (${samples.length}/${expected})`, samples: samples.length };
+    return {
+      rejected: false,
+      rejectReason: '',
+      epoch: [],
+      samples: samples.length,
+      quality: 'insufficient',
+      qualityWarning: `too few samples (${samples.length}/${expected})`,
+      maxAbsUv: 0,
+    };
   }
 
-  const nChannels = Math.max(...samples.map(sample => sample.ch.length));
+  const nChannels = Math.max(0, ...samples.map(sample => sample.ch.length));
   const baseline = samples.filter(sample => sample.t < stimulusTs);
-  if (baseline.length < 5) return { rejected: true, rejectReason: 'missing baseline', samples: samples.length };
 
   const means = Array.from({ length: nChannels }, (_, channel) => {
     const vals = baseline.map(sample => sample.ch[channel]).filter(Number.isFinite);
@@ -354,16 +360,16 @@ function extractEpoch(stimulusTs) {
     }
   }
 
-  if (maxAbs > ARTIFACT_REJECT_UV) {
-    return { rejected: true, rejectReason: `artifact > ${ARTIFACT_REJECT_UV}uV`, samples: samples.length, maxAbsUv: round(maxAbs, 2) };
-  }
+  const warnings = [];
+  if (baseline.length < 5) warnings.push('missing baseline');
+  if (maxAbs > ARTIFACT_WARN_UV) warnings.push(`high amplitude ${round(maxAbs, 1)}uV`);
 
   return {
     rejected: false,
     epoch,
     samples: samples.length,
-    quality: maxAbs > ARTIFACT_WARN_UV ? 'noisy' : 'ok',
-    qualityWarning: maxAbs > ARTIFACT_WARN_UV ? `high amplitude ${round(maxAbs, 1)}uV` : '',
+    quality: warnings.length ? 'noisy' : 'ok',
+    qualityWarning: warnings.join('; '),
     maxAbsUv: round(maxAbs, 2),
   };
 }
@@ -389,10 +395,10 @@ function p300Channels(nChannels) {
 }
 
 function scoreEpoch(extraction, threshold) {
-  if (extraction.rejected) {
+  if (!extraction.epoch?.length) {
     return {
-      rejected: true,
-      rejectReason: extraction.rejectReason,
+      rejected: false,
+      rejectReason: '',
       samples: extraction.samples || 0,
       p300Detected: false,
       score: 0,
@@ -402,7 +408,7 @@ function scoreEpoch(extraction, threshold) {
       latencyMs: null,
       auc: 0,
       channelsUsed: [],
-      quality: extraction.quality || 'rejected',
+      quality: extraction.quality || 'insufficient',
     };
   }
 
@@ -411,7 +417,20 @@ function scoreEpoch(extraction, threshold) {
   const channels = p300Channels(nChannels);
   const window = epoch.filter(sample => sample.t >= P300_START_MS && sample.t <= P300_END_MS);
   if (!window.length || !channels.length) {
-    return { rejected: true, rejectReason: 'empty P300 window', samples: extraction.samples, p300Detected: false, score: 0, confidence: 0, amplitude: 0, meanAmplitude: 0, latencyMs: null, auc: 0, channelsUsed: channels };
+    return {
+      rejected: false,
+      rejectReason: '',
+      samples: extraction.samples,
+      p300Detected: false,
+      score: 0,
+      confidence: 0,
+      amplitude: 0,
+      meanAmplitude: 0,
+      latencyMs: null,
+      auc: 0,
+      channelsUsed: channels.map(channel => state.buffer.channels[channel] || `ch${channel}`),
+      quality: 'insufficient',
+    };
   }
 
   const series = window.map(sample => ({
@@ -445,19 +464,18 @@ function scoreEpoch(extraction, threshold) {
 }
 
 function classifyResponse(result, threshold) {
-  if (result.rejected) return 'rejected';
   if (result.amplitude >= threshold * 1.45) return 'human_fire';
   if (result.amplitude >= threshold * 0.75) return 'item_fire';
   return 'normal';
 }
 
 function computeEpochBandFeatures(extraction) {
-  if (extraction.rejected || !extraction.epoch?.length) {
-    return { rejected: true };
+  if (!extraction.epoch?.length) {
+    return { quality: extraction.quality || 'insufficient' };
   }
   const epoch = extraction.epoch;
   const nChannels = epoch[0]?.ch.length || 0;
-  const channels = Array.from({ length: nChannels }, (_v, idx) => idx);
+  const channels = eegChannelIndexes(nChannels);
   const features = {};
   const relRows = [];
 

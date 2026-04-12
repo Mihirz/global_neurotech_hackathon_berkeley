@@ -219,9 +219,9 @@ it is waiting for Muse, the Node server is up but no bridge packets have arrived
 
 **Artifact rejection may discard too many epochs**
 If the EEG plot rails near ±1000µV, the Muse electrodes are saturating. Re-wet
-or reseat the Muse sensors and keep the subject still. The app now records these
-rows as `noisy` instead of throwing them all away, but noisy rows are still lower
-quality training data.
+or reseat the Muse sensors and keep the subject still. The app records these
+rows with `signalQuality` warnings instead of rejecting them, but noisy rows are
+still lower quality training data.
 
 **P300 latency varies per person**
 Default window is 300–600ms. If collected rows show a consistent peak outside

@@ -74,6 +74,9 @@ const collectionSessions = new Map();
 let connectedClients = new Set();
 let lastCrownStatus  = null;
 let cortex           = null;
+let latestMusePacketAt = null;
+let latestMuseBands = null;
+let latestMuseStatusBroadcastAt = 0;
 
 const COLLECTION_CATEGORIES = {
   'humans in fire': {
@@ -121,16 +124,22 @@ function getCvProvider() {
   return null;
 }
 
+function getEegSource() {
+  return (process.env.EEG_SOURCE || 'muse').toLowerCase();
+}
+
 function getConfigPayload() {
   const cvProvider = getCvProvider();
+  const eegSource = getEegSource();
   return {
     droneUrl:         process.env.DRONE_STREAM_URL || null,
-    demo:             !process.env.EMOTIV_CLIENT_ID || process.env.EMOTIV_CLIENT_ID === 'your-client-id',
+    demo:             eegSource === 'demo' || (eegSource === 'emotiv' && (!process.env.EMOTIV_CLIENT_ID || process.env.EMOTIV_CLIENT_ID === 'your-client-id')),
+    eegSource,
     hasAnthropicKey:  !!process.env.ANTHROPIC_API_KEY,
     hasOpenAIKey:     !!process.env.OPENAI_API_KEY,
     hasAiAnalysisKey: !!cvProvider,
     cvProvider:       cvProvider || 'demo',
-    headset:          'Emotiv Insight',
+    headset:          eegSource === 'emotiv' ? 'Emotiv Insight' : eegSource === 'demo' ? 'Synthetic EEG' : 'Muse 2 via LSL bridge',
   };
 }
 
@@ -284,6 +293,23 @@ function broadcastStatus(payload) {
   broadcast('crown_status', payload);
 }
 
+// ── EEG source connection ─────────────────────────────────────────────────────
+async function connectEEGSource() {
+  const eegSource = getEegSource();
+  if (eegSource === 'muse') {
+    console.log('[Muse] Waiting for Muse 2 LSL bridge at /api/muse/eeg');
+    broadcastStatus({ state: 'connecting', message: 'Waiting for Muse 2 LSL bridge — run: python muse_lsl_bridge.py' });
+    return;
+  }
+  if (eegSource === 'demo') {
+    console.log('[EEG] Running in DEMO mode');
+    broadcastStatus({ state: 'demo', message: 'Demo mode — simulated EEG active' });
+    startSimulatedEEG();
+    return;
+  }
+  await connectInsight();
+}
+
 // ── Emotiv Cortex connection ──────────────────────────────────────────────────
 async function connectInsight() {
   const clientId     = process.env.EMOTIV_CLIENT_ID;
@@ -367,6 +393,52 @@ wss.on('connection', (ws) => {
 // ── REST: Config ──────────────────────────────────────────────────────────────
 app.get('/api/config', (req, res) => {
   res.json(getConfigPayload());
+});
+
+// ── REST: Muse 2 LSL bridge ──────────────────────────────────────────────────
+app.post('/api/muse/eeg', (req, res) => {
+  const packet = req.body || {};
+  if (!Array.isArray(packet.data) || !packet.data.length) {
+    return res.status(400).json({ error: 'Expected data[] EEG samples' });
+  }
+  const sampleRate = Number(packet.sampleRate) > 0 ? Number(packet.sampleRate) : 256;
+  const startTime = Number(packet.startTime) || Date.now();
+  const channels = Array.isArray(packet.channels) && packet.channels.length
+    ? packet.channels.map(String)
+    : packet.data[0].map((_v, idx) => `Ch${idx + 1}`);
+
+  const payload = {
+    data: packet.data,
+    startTime,
+    sampleRate,
+    channels,
+    source: 'muse2-lsl',
+  };
+  latestMusePacketAt = Date.now();
+  broadcast('eeg_packet', payload);
+  if (Date.now() - latestMuseStatusBroadcastAt > 1000) {
+    broadcastStatus({ state: 'online', message: `Muse 2 streaming — ${sampleRate.toFixed(0)}Hz · ${channels.join(' ')}` });
+    latestMuseStatusBroadcastAt = Date.now();
+  }
+  res.json({ ok: true, samples: payload.data.length, channels, sampleRate });
+});
+
+app.post('/api/muse/bands', (req, res) => {
+  latestMuseBands = {
+    receivedAt: Date.now(),
+    ...req.body,
+  };
+  broadcast('muse_bands', latestMuseBands);
+  res.json({ ok: true });
+});
+
+app.get('/api/muse/status', (_req, res) => {
+  res.json({
+    source: getEegSource(),
+    online: latestMusePacketAt ? Date.now() - latestMusePacketAt < 5000 : false,
+    lastPacketAt: latestMusePacketAt,
+    bands: latestMuseBands,
+  });
 });
 
 // ── REST: EEG collection image trials ────────────────────────────────────────
@@ -574,11 +646,12 @@ app.post('/api/trip-summary', async (req, res) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, async () => {
   console.log(`\n╔══════════════════════════════════════╗`);
-  console.log(`║   NeuroRSVP — Emotiv Insight BCI    ║`);
+  console.log(`║   NeuroRSVP — EEG Image Collection  ║`);
   console.log(`║   http://localhost:${PORT}               ║`);
   console.log(`║   Review: http://localhost:${PORT}/review║`);
+  console.log(`║   Collect: http://localhost:${PORT}/collection║`);
   console.log(`╚══════════════════════════════════════╝\n`);
-  await connectInsight();
+  await connectEEGSource();
 });
 
 process.on('SIGINT', async () => {

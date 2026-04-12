@@ -1,8 +1,9 @@
 # NeuroRSVP — Firefighter BCI
 
-P300-based human detection triage using a Neurosity Crown and drone live feed.
-Presents drone frames via Rapid Serial Visual Presentation (RSVP) and detects
-P300 ERP components to flag frames where the wearer subconsciously perceived a person.
+P300-based image-response collection for firefighter salience detection using a
+Muse 2 EEG headset. The collection app presents labeled fire-scene images,
+timestamps each stimulus, records concurrent EEG, extracts P300/bandpower
+features, and saves rows for training a classifier.
 
 ---
 
@@ -12,28 +13,35 @@ P300 ERP components to flag frames where the wearer subconsciously perceived a p
 Drone (MJPEG/WebRTC)
         │
         ▼
-  [server.js]  ←──── Neurosity Crown SDK (256Hz EEG)
+  Muse 2 → muselsl stream → muse_lsl_bridge.py
         │                      │
-        │ WebSocket             │ brainwaves('raw')
-        ▼                      ▼
-  [index.html + app.js]   (streamed to frontend via WS)
+        │ HTTP packets          ▼
+        ▼                   [server.js]
+  [collection.html + collection.js]  ← WebSocket eeg_packet
         │
-        ├── RSVP engine (8fps frame presenter)
-        ├── p300.js (epoch extractor + classifier)
-        └── Flagged frame gallery
+        ├── fixation / image / blank trial runner
+        ├── P300 epoch extractor (-200ms to +800ms)
+        ├── delta/theta/alpha/beta/gamma feature extraction
+        └── JSON/CSV session export for model training
 ```
 
 ---
 
 ## Quick Start
 
-### 1. Install dependencies
+### 1. Install web dependencies
 
 ```bash
 npm install
 ```
 
-### 2. Configure credentials
+### 2. Install Muse bridge dependencies
+
+```bash
+pip install -r muse_requirements.txt
+```
+
+### 3. Configure `.env`
 
 ```bash
 cp .env.example .env
@@ -42,8 +50,7 @@ cp .env.example .env
 Edit `.env`:
 
 ```env
-EMOTIV_CLIENT_ID=your-client-id
-EMOTIV_CLIENT_SECRET=your-client-secret
+EEG_SOURCE=muse
 OPENAI_API_KEY=your-openai-api-key
 ANTHROPIC_API_KEY=your-anthropic-api-key        # optional fallback/provider
 CV_ANALYSIS_PROVIDER=auto                       # auto|openai|anthropic
@@ -52,19 +59,31 @@ DRONE_STREAM_URL=http://192.168.1.1:8080/video  # leave blank for demo mode
 
 OpenAI is used first when `OPENAI_API_KEY` is set. Anthropic remains available as a fallback or can be forced with `CV_ANALYSIS_PROVIDER=anthropic`.
 
-### 3. Run
+### 4. Start the Muse stream
+
+Run these in separate terminals:
+
+```bash
+muselsl stream
+```
+
+```bash
+python muse_lsl_bridge.py
+```
+
+### 5. Run the web app
 
 ```bash
 npm start
 ```
 
-Open **http://localhost:3000** in Chrome or Edge.
+Open **http://localhost:3000/collection** in Chrome or Edge.
 
 ---
 
 ## Demo Mode
 
-If no Emotiv credentials are set, the app runs in **demo mode**:
+Set `EEG_SOURCE=demo` in `.env` to test without a headset:
 - EEG is synthetically generated at 128Hz
 - P300 deflections (~6µV) are injected ~350ms after "person" frames
 - Thermal-style drone frames are generated with simulated person heat signatures
@@ -93,40 +112,35 @@ download JSON/CSV directly from the browser. In demo mode, synthetic EEG is
 scaled so humans in fire create the strongest P300 response, items in fire create
 a moderate response, and normal items create little or no P300 response.
 
+Train a starter classifier from saved sessions:
+
+```bash
+python train_muse_p300_classifier.py --sessions "collection_data/*.json"
+```
+
 ---
 
 ## Workflow
 
-### Step 1: Calibrate
-Click **Calibrate Crown** before scanning.
+### Step 1: Connect Muse 2
+Start `muselsl stream`, then start `python muse_lsl_bridge.py`. The collection
+page should show `Muse 2 streaming` once packets reach the Node server.
 
-The calibration routine presents 75 images (15 targets with simulated persons,
-60 non-targets without) at 400ms ISI. It computes the grand-average P300
-component and sets a personalized detection threshold.
+### Step 2: Collect Image Responses
+Open `/collection`, set the trial count and timing, then click **Start
+Collection**. Each trial shows a fixation cross, one labeled image, then a blank
+period while the app waits for the post-stimulus EEG window.
 
-**What to do:** Watch the calibration images and mentally note when you see a person.
-Do not blink excessively. Remain still.
+**What to do:** Watch passively and keep still. Do not try to manually classify
+each image; the goal is to record the EEG response aligned to each stimulus.
 
-**Duration:** ~30 seconds.
+### Step 3: Save and Train
+Use **Save to Server** or **Download JSON/CSV** after collection. The saved JSON
+contains the label, image ID, stimulus timestamp, P300 features, Muse bandpower
+features, channel names, and rejection reason if an epoch was noisy.
 
-After calibration, you'll see the target vs non-target ERP traces plotted.
-The orange trace (target) should show a positive deflection at 300–500ms.
-
-### Step 2: Scan
-Click **Begin Scan** to start the RSVP loop.
-
-Drone frames are presented at **8Hz** (125ms each). For each frame:
-1. Frame is sampled from the drone feed (or simulated)
-2. Presented fullscreen in the RSVP window
-3. 600ms later, the EEG epoch is extracted and scored
-4. If P300 amplitude > threshold → frame flagged in the Detection Gallery
-
-**What to do:** Watch the RSVP stream. Do not try to consciously judge frames —
-your P300 fires pre-consciously. Passive observation gives the best signal.
-
-### Step 3: Review
-Flagged frames appear in the right panel, newest first, sorted by detection time.
-Frame ID and P300 amplitude are shown on each card.
+Train the starter model with `python train_muse_p300_classifier.py --sessions
+"collection_data/*.json"` after collecting enough trials.
 
 ---
 
@@ -134,29 +148,31 @@ Frame ID and P300 amplitude are shown on each card.
 
 | Parameter | Default | Notes |
 |-----------|---------|-------|
-| Presentation rate | 8 Hz | 4–16 Hz. Slower = stronger P300 but lower throughput |
-| P300 threshold | 3.0 µV | Lowered automatically after calibration |
+| Total trials | 90 | Uses 20% human-fire, 30% item-fire, 50% normal |
+| Fixation | 500 ms | Pre-image fixation cross |
+| Image display | 400 ms | Stimulus display window |
+| Blank / EEG window | 900 ms | Lets the +800ms epoch arrive before scoring |
+| P300 threshold | 3.0 µV | Initial single-trial threshold |
 | Artifact rejection | ±100 µV | Epochs with any channel exceeding this are discarded |
-| P300 window | 250–550 ms | Fixed; covers typical P300 latency range |
-| Baseline | 100 ms pre-stimulus | Used for baseline correction |
+| P300 window | 300–600 ms | Fixed; covers the PRD P300 feature window |
+| Baseline | 200 ms pre-stimulus | Used for baseline correction |
 
 ---
 
-## EEG Channel Map (Neurosity Crown)
+## Muse 2 Channel Map
 
 ```
-Index  Label   Position        P300 relevance
-  0    CP3     Left centroparietal   Secondary
-  1    C3      Left central          Low
-  2    F5      Left frontal          Low
-  3    PO3     Left parieto-occipital  PRIMARY
-  4    PO4     Right parieto-occipital PRIMARY
-  5    F6      Right frontal         Low
-  6    C4      Right central         Low
-  7    CP4     Right centroparietal  Secondary
+Typical Muse 2 LSL channels:
+  TP9
+  AF7
+  AF8
+  TP10
 ```
 
-P300 is scored from the average of PO3 (index 3) and PO4 (index 4).
+Muse 2 does not have a true Pz electrode. The app uses the available Muse
+channels for baseline-corrected P300 and bandpower features, then trains the
+classifier on the subject's collected labels. Treat it as a hackathon salience
+demo rather than a clinical P300 device.
 
 ---
 
@@ -193,22 +209,22 @@ This plays the video in the hidden `<video>` element and samples it at RSVP rate
 
 ## Known Limitations & Hackathon Workarounds
 
-**Crown needs contact quality check first**
-Before calibrating, run the Neurosity app on your phone and confirm all channels
-show green contact quality. Poor contact → no signal.
+**Muse 2 must be streaming through LSL**
+Start `muselsl stream` before `python muse_lsl_bridge.py`. If the browser says
+it is waiting for Muse, the Node server is up but no bridge packets have arrived.
 
 **Artifact rejection may discard too many epochs**
 If the EEG plot shows large swings (>100µV), the subject is moving. Reduce the
-threshold in `p300.js` → `ARTIFACT_THRESH_UV` to 50, or ask the subject to relax.
+threshold in `collection.js` (`ARTIFACT_UV`) to 50, or ask the subject to relax.
 
 **P300 latency varies per person**
-Default window is 250–550ms. If calibration shows the peak outside this range,
-adjust `P300_WIN_START` and `P300_WIN_END` in `p300.js`.
+Default window is 300–600ms. If collected rows show a consistent peak outside
+this range, adjust `P300_START_MS` and `P300_END_MS` in `collection.js`.
 
 **Single-trial P300 is noisy**
-The system makes single-trial decisions (one epoch per frame). For higher accuracy,
-average multiple passes of the same flight path. The `stimulusLog` array stores
-all epochs — you can implement post-hoc averaging.
+The system records single-trial rows. For higher accuracy, collect multiple
+sessions per user and train on the saved JSON rows instead of trusting one raw
+threshold score.
 
 ---
 
@@ -216,11 +232,13 @@ all epochs — you can implement post-hoc averaging.
 
 ```
 neurorsvp/
-├── server.js          # Express + WebSocket + Neurosity Crown connection
-├── public/
-│   ├── index.html     # Main UI (tactical dark, Barlow Condensed)
-│   ├── app.js         # Frontend: RSVP engine, EEG display, UI logic
-│   └── p300.js        # Signal processing: EEGBuffer, epoch extraction, Calibrator
+├── server.js                    # Express + WebSocket + Muse bridge endpoints
+├── muse_lsl_bridge.py           # Muse 2 LSL -> Node EEG packet bridge
+├── collection.html              # Image/EEG collection UI
+├── collection.js                # Trial runner, P300 features, band features
+├── train_muse_p300_classifier.py # Starter classifier training script
+├── index.html                   # Existing drone scan UI
+├── app.js                       # Existing RSVP scan UI logic
 ├── .env.example       # Config template
 ├── package.json
 └── README.md
@@ -232,5 +250,5 @@ neurorsvp/
 
 - Sajda et al. (2010) "In a blink of an eye and a switch of a transistor" — foundational RSVP-BCI paper
 - DARPA Cortically Coupled Computer Vision (C3Vision) program
-- Neurosity SDK docs: https://docs.neurosity.co/docs/reference/overview
+- Muse LSL tooling: https://github.com/alexandrebarachant/muse-lsl
 - MNE-Python P300 analysis: https://mne.tools/stable/auto_examples/

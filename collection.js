@@ -3,6 +3,13 @@ const POST_MS = 800;
 const P300_START_MS = 300;
 const P300_END_MS = 600;
 const ARTIFACT_UV = 100;
+const BANDS = {
+  delta: [1, 4],
+  theta: [4, 8],
+  alpha: [8, 12],
+  beta: [13, 30],
+  gamma: [30, 45],
+};
 
 const LABELS = {
   human_fire: { name: 'Humans in fire', short: 'HUMAN', rank: 2 },
@@ -55,6 +62,7 @@ const state = {
   runToken: 0,
   sessionId: makeSessionId(),
   savedPath: null,
+  latestBands: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -116,6 +124,10 @@ function connectWS() {
     if (msg.type === 'eeg_packet') {
       state.buffer.push(msg.payload);
       appendWaveform(msg.payload);
+    }
+    if (msg.type === 'muse_bands') {
+      state.latestBands = msg.payload;
+      renderBands();
     }
   };
 }
@@ -272,6 +284,7 @@ function analyzeTrial(trial, stimulusTs) {
   const epoch = extractEpoch(stimulusTs);
   const threshold = numericInput('threshold-uv');
   const result = scoreEpoch(epoch, threshold);
+  const bandFeatures = computeEpochBandFeatures(epoch);
   const predictedClass = classifyResponse(result, threshold);
   return {
     sessionId: state.sessionId,
@@ -295,6 +308,7 @@ function analyzeTrial(trial, stimulusTs) {
     samples: result.samples,
     sampleRate: state.buffer.sampleRate,
     channelsUsed: result.channelsUsed,
+    bandFeatures,
     rejected: result.rejected,
     rejectReason: result.rejectReason,
   };
@@ -402,6 +416,75 @@ function classifyResponse(result, threshold) {
   return 'normal';
 }
 
+function computeEpochBandFeatures(extraction) {
+  if (extraction.rejected || !extraction.epoch?.length) {
+    return { rejected: true };
+  }
+  const epoch = extraction.epoch;
+  const nChannels = epoch[0]?.ch.length || 0;
+  const channels = Array.from({ length: nChannels }, (_v, idx) => idx);
+  const features = {};
+  const relRows = [];
+
+  for (const channel of channels) {
+    const name = state.buffer.channels[channel] || `ch${channel}`;
+    const signal = epoch.map(sample => sample.ch[channel] || 0);
+    const powers = dftBandpowers(signal, state.buffer.sampleRate);
+    const rel = {};
+    for (const band of Object.keys(BANDS)) {
+      features[`${name}_${band}_abs`] = round(powers.absolute[band], 6);
+      features[`${name}_${band}_rel`] = round(powers.relative[band], 6);
+      rel[band] = powers.relative[band];
+    }
+    relRows.push(rel);
+  }
+
+  for (const band of Object.keys(BANDS)) {
+    features[`avg_${band}_rel`] = round(mean(relRows.map(row => row[band])), 6);
+  }
+  return features;
+}
+
+function dftBandpowers(signal, sampleRate) {
+  const n = signal.length;
+  if (n < 8) {
+    return {
+      absolute: Object.fromEntries(Object.keys(BANDS).map(band => [band, 0])),
+      relative: Object.fromEntries(Object.keys(BANDS).map(band => [band, 0])),
+    };
+  }
+
+  const avg = mean(signal);
+  const windowed = signal.map((value, idx) => {
+    const hamming = 0.54 - 0.46 * Math.cos((2 * Math.PI * idx) / Math.max(1, n - 1));
+    return (value - avg) * hamming;
+  });
+  const maxHz = Math.min(45, Math.floor(sampleRate / 2));
+  const spectrum = [];
+  for (let hz = 1; hz <= maxHz; hz++) {
+    let re = 0;
+    let im = 0;
+    for (let idx = 0; idx < n; idx++) {
+      const phase = (2 * Math.PI * hz * idx) / sampleRate;
+      re += windowed[idx] * Math.cos(phase);
+      im -= windowed[idx] * Math.sin(phase);
+    }
+    spectrum.push({ hz, power: (re * re + im * im) / n });
+  }
+
+  const absolute = {};
+  for (const [band, [lo, hi]] of Object.entries(BANDS)) {
+    absolute[band] = spectrum
+      .filter(point => point.hz >= lo && point.hz <= Math.min(hi, maxHz))
+      .reduce((sum, point) => sum + point.power, 0);
+  }
+  const total = Object.values(absolute).reduce((sum, value) => sum + value, 0);
+  const relative = Object.fromEntries(
+    Object.entries(absolute).map(([band, value]) => [band, total > 0 ? value / total : 0]),
+  );
+  return { absolute, relative };
+}
+
 function renderEvent(event) {
   const row = document.createElement('div');
   row.className = 'event-row';
@@ -437,6 +520,16 @@ function renderStats() {
     </div>
   `);
   $('stats-grid').innerHTML = rows.join('');
+}
+
+function renderBands() {
+  const bands = state.latestBands?.bands || {};
+  $('band-grid').innerHTML = Object.keys(BANDS).map(band => `
+    <div class="band-cell">
+      <strong>${round((bands[band] || 0) * 100, 1)}%</strong>
+      <span>${band}</span>
+    </div>
+  `).join('');
 }
 
 function updateProgress() {
@@ -543,17 +636,27 @@ function downloadJson() {
 }
 
 function downloadCsv() {
+  const bandCols = Object.keys(BANDS).map(band => `band_avg_${band}_rel`);
   const cols = [
     'sessionId', 'trialIndex', 'stimulusTimestamp', 'collectedAt', 'imageId', 'fileName',
     'folder', 'label', 'predictedClass', 'isTarget', 'p300Detected', 'p300Score',
     'confidence', 'p300AmplitudeUv', 'meanAmplitudeUv', 'p300LatencyMs', 'auc',
     'thresholdUv', 'samples', 'sampleRate', 'channelsUsed', 'rejected', 'rejectReason',
+    ...bandCols,
   ];
   const lines = [cols.join(',')];
   for (const event of state.events) {
-    lines.push(cols.map(col => csvCell(Array.isArray(event[col]) ? event[col].join('|') : event[col])).join(','));
+    lines.push(cols.map(col => csvCell(csvValue(event, col))).join(','));
   }
   downloadFile(`${state.sessionId}.csv`, 'text/csv', lines.join('\n'));
+}
+
+function csvValue(event, col) {
+  if (col.startsWith('band_avg_') && col.endsWith('_rel')) {
+    const band = col.replace('band_avg_', '').replace('_rel', '');
+    return event.bandFeatures?.[`avg_${band}_rel`] ?? '';
+  }
+  return Array.isArray(event[col]) ? event[col].join('|') : event[col];
 }
 
 function downloadFile(name, type, content) {

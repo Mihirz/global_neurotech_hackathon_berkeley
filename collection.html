@@ -274,6 +274,35 @@
     gap: 8px;
   }
 
+  .band-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 6px;
+    margin-top: 10px;
+  }
+
+  .band-cell {
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    padding: 7px 5px;
+    text-align: center;
+    background: var(--panel-2);
+  }
+
+  .band-cell strong {
+    display: block;
+    color: var(--fire);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  .band-cell span {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+  }
+
   #event-log {
     display: grid;
     gap: 8px;
@@ -376,6 +405,7 @@
     <section>
       <h2>Live EEG</h2>
       <canvas id="waveform" width="330" height="86"></canvas>
+      <div class="band-grid" id="band-grid"></div>
     </section>
 
     <section>

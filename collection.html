@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NeuroRSVP Collection</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :root {
+    --bg: #070807;
+    --panel: #11120f;
+    --panel-2: #181a15;
+    --ink: #e5e1d8;
+    --muted: #8f9188;
+    --line: rgba(255, 132, 43, .28);
+    --line-soft: rgba(255, 132, 43, .14);
+    --fire: #ff842b;
+    --red: #ff4d3d;
+    --green: #65db8f;
+    --yellow: #ffd166;
+    --mono: 'Share Tech Mono', monospace;
+    --condensed: 'Barlow Condensed', sans-serif;
+    --body: 'Barlow', sans-serif;
+  }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--body);
+    overflow: hidden;
+  }
+
+  .app {
+    display: grid;
+    grid-template-columns: 300px 1fr 360px;
+    grid-template-rows: 48px 1fr;
+    height: 100vh;
+  }
+
+  header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--line);
+    background: #0c0d0b;
+  }
+
+  .logo {
+    font-family: var(--condensed);
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--fire);
+    min-width: 230px;
+  }
+
+  .logo span { color: var(--muted); font-weight: 500; }
+  .pills { display: flex; gap: 10px; flex: 1; min-width: 0; }
+  .pill {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 9px;
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #444;
+  }
+  .dot[data-state="green"] { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot[data-state="amber"] { background: var(--yellow); }
+  .dot[data-state="red"] { background: var(--red); }
+
+  #mode-label {
+    font-family: var(--mono);
+    color: var(--fire);
+    letter-spacing: .1em;
+    font-size: 12px;
+  }
+
+  aside, main {
+    min-height: 0;
+  }
+
+  .left, .right {
+    background: var(--panel);
+    overflow-y: auto;
+  }
+  .left { border-right: 1px solid var(--line-soft); }
+  .right { border-left: 1px solid var(--line-soft); }
+
+  section {
+    padding: 15px 16px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  h2 {
+    margin: 0 0 12px;
+    font-family: var(--condensed);
+    font-size: 13px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .btns { display: grid; gap: 8px; }
+  button, input {
+    font: inherit;
+  }
+
+  button {
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--ink);
+    padding: 9px 12px;
+    cursor: pointer;
+    font-family: var(--condensed);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-align: left;
+    text-transform: uppercase;
+  }
+  button:hover:not(:disabled) { border-color: var(--fire); color: var(--fire); background: rgba(255, 132, 43, .08); }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+  button.primary { background: rgba(255, 132, 43, .14); color: var(--fire); border-color: var(--fire); }
+  button.danger { border-color: rgba(255, 77, 61, .45); color: #ff9c93; }
+
+  label {
+    display: grid;
+    gap: 5px;
+    margin-bottom: 10px;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+
+  input {
+    width: 100%;
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    background: #090a08;
+    color: var(--ink);
+    padding: 8px;
+    font-family: var(--mono);
+  }
+
+  .dataset-list {
+    display: grid;
+    gap: 8px;
+  }
+
+  .dataset-row, .stat-row, .event-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+    align-items: center;
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+    padding: 8px 10px;
+    background: var(--panel-2);
+  }
+
+  .dataset-row strong, .stat-row strong {
+    font-family: var(--condensed);
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+  .dataset-row span, .stat-row span {
+    color: var(--fire);
+    font-family: var(--mono);
+  }
+
+  main {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) 108px;
+    background: #000;
+  }
+
+  #stimulus-screen {
+    position: relative;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    background: #000;
+  }
+
+  #stimulus-img {
+    display: none;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+  }
+
+  #fixation {
+    display: none;
+    font-family: var(--mono);
+    font-size: 72px;
+    color: #f6f1e8;
+  }
+
+  #blank-label {
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: .08em;
+  }
+
+  .screen-hud {
+    position: absolute;
+    left: 16px;
+    right: 16px;
+    bottom: 16px;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--fire);
+    font-family: var(--mono);
+    font-size: 12px;
+    pointer-events: none;
+  }
+
+  .progress {
+    padding: 14px 16px;
+    border-top: 1px solid var(--line-soft);
+    background: #080907;
+  }
+
+  .bar {
+    height: 5px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 9px;
+  }
+  #progress-fill {
+    width: 0;
+    height: 100%;
+    background: var(--fire);
+  }
+
+  #progress-text, #current-meta {
+    font-family: var(--mono);
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 4px;
+  }
+
+  #waveform {
+    width: 100%;
+    height: 86px;
+    background: #090a08;
+    border: 1px solid var(--line-soft);
+    border-radius: 4px;
+  }
+
+  .stats {
+    display: grid;
+    gap: 8px;
+  }
+
+  #event-log {
+    display: grid;
+    gap: 8px;
+  }
+
+  .event-row {
+    grid-template-columns: 74px 1fr 74px;
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .event-row b {
+    color: var(--ink);
+    font-family: var(--condensed);
+    letter-spacing: .07em;
+    text-transform: uppercase;
+  }
+  .event-row span { color: var(--muted); }
+  .event-row .hit { color: var(--green); }
+  .event-row .miss { color: var(--red); }
+
+  .note {
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  a { color: var(--fire); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo">NeuroRSVP <span>/ EEG Collection</span></div>
+    <div class="pills">
+      <div class="pill"><span class="dot" id="ws-dot"></span><span id="ws-status">websocket</span></div>
+      <div class="pill"><span class="dot" id="eeg-dot"></span><span id="eeg-status">waiting for eeg</span></div>
+      <div class="pill"><span id="dataset-count">0 images</span></div>
+      <div class="pill"><span id="session-id">session pending</span></div>
+    </div>
+    <div id="mode-label">IDLE</div>
+  </header>
+
+  <aside class="left">
+    <section>
+      <h2>Session</h2>
+      <div class="btns">
+        <button class="primary" id="btn-start" disabled>Start Collection</button>
+        <button id="btn-pause" disabled>Pause</button>
+        <button class="danger" id="btn-reset">Reset Session</button>
+        <button id="btn-save" disabled>Save to Server</button>
+        <button id="btn-json" disabled>Download JSON</button>
+        <button id="btn-csv" disabled>Download CSV</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Protocol</h2>
+      <label>Total trials
+        <input id="total-trials" type="number" min="3" max="900" value="90">
+      </label>
+      <label>Fixation (ms)
+        <input id="fixation-ms" type="number" min="100" max="3000" value="500">
+      </label>
+      <label>Image display (ms)
+        <input id="image-ms" type="number" min="100" max="2000" value="400">
+      </label>
+      <label>Blank / EEG window (ms)
+        <input id="blank-ms" type="number" min="500" max="3000" value="900">
+      </label>
+      <label>P300 threshold (uV)
+        <input id="threshold-uv" type="number" min="0.5" max="20" step="0.1" value="3.0">
+      </label>
+      <p class="note">Trials use the PRD oddball mix: 20% humans in fire, 30% items in fire, 50% normal items.</p>
+    </section>
+
+    <section>
+      <h2>Image Dataset</h2>
+      <div class="dataset-list" id="dataset-list"></div>
+    </section>
+  </aside>
+
+  <main>
+    <div id="stimulus-screen">
+      <img id="stimulus-img" alt="collection stimulus">
+      <div id="fixation">+</div>
+      <div id="blank-label">Load dataset, then start collection</div>
+      <div class="screen-hud">
+        <span id="trial-label">TRIAL 000/000</span>
+        <span id="phase-label">READY</span>
+      </div>
+    </div>
+    <div class="progress">
+      <div class="bar"><div id="progress-fill"></div></div>
+      <div id="progress-text">No trials collected yet.</div>
+      <div id="current-meta">Each row will align image_id, label, stimulus timestamp, EEG response, and P300 features.</div>
+    </div>
+  </main>
+
+  <aside class="right">
+    <section>
+      <h2>Live EEG</h2>
+      <canvas id="waveform" width="330" height="86"></canvas>
+    </section>
+
+    <section>
+      <h2>Stats</h2>
+      <div class="stats" id="stats-grid"></div>
+    </section>
+
+    <section>
+      <h2>Latest Trials</h2>
+      <div id="event-log"></div>
+    </section>
+  </aside>
+</div>
+
+<script type="module" src="collection.js"></script>
+</body>
+</html>

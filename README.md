@@ -73,55 +73,25 @@ Demo mode is fully functional for testing the pipeline and UI.
 
 ---
 
-## EEG Salience Classification Demo
+## EEG Image Collection App
 
-The repo also includes a Python PRD prototype for EEG-based salience detection
-across the sorted image folders:
+Open **http://localhost:3000/collection** to run the web-based data collection
+station for the sorted image folders:
 
-- `images/humans in fire` -> `human_fire` target-critical
-- `images/items in fire` -> `item_fire` secondary target
-- `images/abnormal items` -> `normal` non-target baseline for this demo
+- `images/humans in fire` -> `human_fire`
+- `images/items in fire` -> `item_fire`
+- `images/abnormal items` -> `normal`
 
-Install the Python dependencies:
+The collection app presents fixation, image, and blank periods using the PRD
+oddball mix (20% humans in fire, 30% items in fire, 50% normal items). It
+timestamps every stimulus, extracts a -200ms to +800ms EEG epoch from the live
+WebSocket stream, scores the 300-600ms P300 window, and records one row per
+image response.
 
-```bash
-pip install -r eeg_salience_requirements.txt
-```
-
-Run a fast headless smoke test:
-
-```bash
-python eeg_salience_demo.py --dry-run --trials 18 --calibration-trials 90
-```
-
-Run the stimulus display loop:
-
-```bash
-python eeg_salience_demo.py --display --trials 60 --calibration-trials 180
-```
-
-The script simulates 256Hz EEG by default, trains per-session P300 and
-three-class classifiers, extracts -200ms to +800ms epochs, scores the 300-600ms
-P300 window, and writes real-time JSONL events to
-`outputs/eeg_salience_events.jsonl`.
-
-Each event includes:
-
-```json
-{
-  "timestamp": 1770000000.0,
-  "image_id": "humans in fire 1",
-  "predicted_class": "human_fire",
-  "confidence": 0.91,
-  "p300_strength": 0.84,
-  "p300_detected": true
-}
-```
-
-The final session summary reports useful statistics by class, including event
-counts, accuracy, P300 detection rate, mean P300 strength, and mean confidence.
-The LSL/headset connection is intentionally isolated for now; replace
-`SyntheticEEGSource` with a source that exposes `get_epoch(...)` for real EEG.
+Use **Save to Server** to write the session JSON under `collection_data/`, or
+download JSON/CSV directly from the browser. In demo mode, synthetic EEG is
+scaled so humans in fire create the strongest P300 response, items in fire create
+a moderate response, and normal items create little or no P300 response.
 
 ---
 

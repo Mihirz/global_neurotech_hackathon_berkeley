@@ -143,14 +143,16 @@ function computeERP(dt, isFace, params) {
     const vpp = gauss(dt, params.vppLat, 20, params.vppAmp);
     for (let c = 0; c < N_CH; c++) ch[c] += TOPO.VPP[c] * vpp;
 
-    // ── Late positivity (280–400ms): task-relevant recognition ───────────────
-    const p3 = gauss(dt, 320, 55, params.p3Amp);
-    for (let c = 0; c < N_CH; c++) ch[c] += TOPO.P3[c] * p3;
-
   } else {
     // ── P2 for non-face objects (180–240ms): present but no N170/VPP ────────
     const p2 = gauss(dt, 200, 28, 0.9 + randn() * 0.3);
     for (let c = 0; c < N_CH; c++) ch[c] += TOPO.P2obj[c] * p2;
+  }
+
+  // ── Late positivity (280–400ms): task-relevant recognition / salience ─────
+  if (params.p3Amp) {
+    const p3 = gauss(dt, 320, 55, params.p3Amp);
+    for (let c = 0; c < N_CH; c++) ch[c] += TOPO.P3[c] * p3;
   }
 
   return ch;
@@ -160,9 +162,13 @@ function computeERP(dt, isFace, params) {
  * Sample per-trial random ERP parameters.
  * Draws from distributions that match published N170/VPP variability.
  */
-function sampleERPParams(isFace) {
-  if (!isFace) return {};
+function sampleERPParams(isFace, salience = isFace ? 1 : 0) {
+  const params = {
+    p3Amp: salience > 0 ? clamp((randn() * 1.0 + 2.5) * salience, 0.2, 9.0) : 0,
+  };
+  if (!isFace) return params;
   return {
+    ...params,
     // N170: slightly left-lateralized mean, std 1.5µV
     n170Amp: clamp(randn() * 1.5 - 4.5, -8.0, -1.5),
     // N170 latency: 170ms mean, std 15ms (range 130–220ms)
@@ -171,8 +177,6 @@ function sampleERPParams(isFace) {
     vppAmp:  clamp(randn() * 1.0 + 3.2,  1.0,  6.0),
     // VPP latency: slightly later than N170
     vppLat:  clamp(175 + randn() * 12, 140, 220),
-    // Late P3 amplitude (variable, task-dependent)
-    p3Amp:   clamp(randn() * 1.0 + 2.5,  0.5,  5.0),
   };
 }
 
@@ -527,11 +531,11 @@ export class SyntheticEEGStream {
    * If isFace=true, an N170+VPP will be injected at ts+170ms.
    * If isFace=false, only P1/N1/P2 (present for all stimuli) is injected.
    */
-  notifyFrameOnset(ts, isFace = false) {
+  notifyFrameOnset(ts, isFace = false, salience = isFace ? 1 : 0) {
     this._pendingERPs.push({
       onset:  ts,
       isFace,
-      params: sampleERPParams(isFace),
+      params: sampleERPParams(isFace, salience),
     });
     // Expire old ERPs (> 600ms old)
     this._pendingERPs = this._pendingERPs.filter(e => e.onset > Date.now() - 650);

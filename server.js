@@ -3,6 +3,8 @@ config();
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
+import fs from 'fs';
+import { promises as fsp } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { CortexClient } from './cortex.js';
@@ -17,15 +19,85 @@ app.use(express.static(path.join(__dirname)));
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/review', (_req, res) => res.sendFile(path.join(__dirname, 'review.html')));
+app.get('/collection', (_req, res) => res.sendFile(path.join(__dirname, 'collection.html')));
+
+function detectImageContentType(filePath) {
+  try {
+    const header = fs.readFileSync(filePath).subarray(0, 16);
+    if (header[0] === 0xff && header[1] === 0xd8) return 'image/jpeg';
+    if (header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4e && header[3] === 0x47) return 'image/png';
+    if (header.toString('ascii', 0, 4) === 'RIFF' && header.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+  } catch {}
+  return 'application/octet-stream';
+}
+
+function collectionImagePath(category, fileName) {
+  if (!COLLECTION_CATEGORIES[category]) return null;
+  const categoryDir = path.resolve(__dirname, 'images', category);
+  const filePath = path.resolve(categoryDir, fileName);
+  if (!filePath.startsWith(categoryDir + path.sep)) return null;
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return null;
+  return filePath;
+}
+
+function listCollectionStimuli() {
+  return Object.entries(COLLECTION_CATEGORIES).map(([folder, cfg]) => {
+    const dir = path.join(__dirname, 'images', folder);
+    const files = fs.existsSync(dir)
+      ? fs.readdirSync(dir, { withFileTypes: true })
+          .filter(entry => entry.isFile())
+          .map(entry => entry.name)
+          .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+      : [];
+    const stimuli = files.map((fileName, idx) => ({
+      id: `${cfg.label}-${idx + 1}`,
+      fileName,
+      imageId: path.parse(fileName).name || fileName,
+      folder,
+      label: cfg.label,
+      displayName: cfg.displayName,
+      oddballWeight: cfg.oddballWeight,
+      demoSalience: cfg.demoSalience,
+      isTarget: cfg.isTarget,
+      src: `/api/collection/image/${encodeURIComponent(folder)}/${encodeURIComponent(fileName)}`,
+    }));
+    return { folder, ...cfg, count: stimuli.length, stimuli };
+  });
+}
 
 // ── Session store ─────────────────────────────────────────────────────────────
 const sessionDetections = [];
 const telemetryLog      = [];
 let   latestTelemetry   = null;
+const collectionSessions = new Map();
 
 let connectedClients = new Set();
 let lastCrownStatus  = null;
 let cortex           = null;
+
+const COLLECTION_CATEGORIES = {
+  'humans in fire': {
+    label: 'human_fire',
+    displayName: 'Humans in fire',
+    oddballWeight: 0.20,
+    demoSalience: 1.7,
+    isTarget: true,
+  },
+  'items in fire': {
+    label: 'item_fire',
+    displayName: 'Items in fire',
+    oddballWeight: 0.30,
+    demoSalience: 1.0,
+    isTarget: true,
+  },
+  'abnormal items': {
+    label: 'normal',
+    displayName: 'Normal items',
+    oddballWeight: 0.50,
+    demoSalience: 0.0,
+    isTarget: false,
+  },
+};
 
 const CV_PROMPT = `Firefighting SAR drone frame. Respond ONLY with valid JSON:
 {"personDetected":boolean,"confidence":number,"objects":[],"framePosition":"top-left|top-center|top-right|center-left|center|center-right|bottom-left|bottom-center|bottom-right","estimatedCount":number,"thermalSignature":"string","notes":"string"}`;
@@ -269,7 +341,8 @@ wss.on('connection', (ws) => {
       const msg = JSON.parse(raw);
       if (msg.type === 'sim_frame_onset' && syntheticStream) {
         const isTarget = msg.isTarget ?? msg.containsPerson ?? msg.isFace ?? false;
-        syntheticStream.notifyFrameOnset(msg.ts, isTarget);
+        const salience = Number.isFinite(msg.salience) ? msg.salience : (isTarget ? 1 : 0);
+        syntheticStream.notifyFrameOnset(msg.ts, isTarget, salience);
       }
       if (msg.type === 'ping') ws.send(JSON.stringify({ type: 'pong', ts: Date.now() }));
     } catch {}
@@ -294,6 +367,54 @@ wss.on('connection', (ws) => {
 // ── REST: Config ──────────────────────────────────────────────────────────────
 app.get('/api/config', (req, res) => {
   res.json(getConfigPayload());
+});
+
+// ── REST: EEG collection image trials ────────────────────────────────────────
+app.get('/api/collection/stimuli', (_req, res) => {
+  const categories = listCollectionStimuli();
+  res.json({
+    categories,
+    total: categories.reduce((sum, cat) => sum + cat.count, 0),
+    ratios: {
+      human_fire: COLLECTION_CATEGORIES['humans in fire'].oddballWeight,
+      item_fire: COLLECTION_CATEGORIES['items in fire'].oddballWeight,
+      normal: COLLECTION_CATEGORIES['abnormal items'].oddballWeight,
+    },
+  });
+});
+
+app.get('/api/collection/image/:category/:fileName', (req, res) => {
+  const filePath = collectionImagePath(req.params.category, req.params.fileName);
+  if (!filePath) return res.status(404).send('Image not found');
+  res.type(detectImageContentType(filePath));
+  res.sendFile(filePath);
+});
+
+app.post('/api/collection/sessions', async (req, res) => {
+  const session = req.body || {};
+  if (!session.sessionId || !Array.isArray(session.events)) {
+    return res.status(400).json({ error: 'Expected sessionId and events[]' });
+  }
+
+  const saved = {
+    ...session,
+    receivedAt: new Date().toISOString(),
+  };
+  collectionSessions.set(session.sessionId, saved);
+
+  const outDir = path.join(__dirname, 'collection_data');
+  await fsp.mkdir(outDir, { recursive: true });
+  const safeId = String(session.sessionId).replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
+  const outPath = path.join(outDir, `${safeId}.json`);
+  await fsp.writeFile(outPath, JSON.stringify(saved, null, 2), 'utf8');
+
+  res.json({ ok: true, sessionId: session.sessionId, events: session.events.length, path: outPath });
+});
+
+app.get('/api/collection/sessions/:sessionId', (req, res) => {
+  const session = collectionSessions.get(req.params.sessionId);
+  if (!session) return res.status(404).json({ error: 'Collection session not found in memory' });
+  res.json(session);
 });
 
 // ── REST: Training data ───────────────────────────────────────────────────────

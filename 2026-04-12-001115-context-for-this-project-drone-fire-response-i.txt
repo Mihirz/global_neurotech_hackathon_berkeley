@@ -1,0 +1,1644 @@
+╭─── Claude Code v2.1.104 ─────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting        │
+│                 Welcome back Mihir!                │ started                 │
+│                                                    │ Run /init to create a … │
+│                      ▗ ▗   ▖ ▖                     │ ─────────────────────── │
+│                                                    │ Recent activity         │
+│                        ▘▘ ▝▝                       │ No recent activity      │
+│       Sonnet 4.6 · Claude Pro ·                    │                         │
+│       mihirsharma700@gmail.com's Organization      │                         │
+│        ~/global_neurotech_hackathon_berkeley       │                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+❯ Context for this project:   Drone fire response insights                      
+  Product Concept: Drone-EEG Fire Rescue System                                 
+  * Combines drone aerial input with firefighter EEG monitoring for enhanced    
+  rescue operations                                                             
+  * Primary use case: On-site fire scenarios where computer vision alone is     
+  insufficient                                                                  
+  * Addresses computer vision limitations in complex fire environments          
+      * YOLO struggles with pixel-by-pixel analysis in camouflaged/complex      
+  backgrounds                                                                   
+      * Lens flare and fire interference reduce camera effectiveness            
+      * Human subconscious detection superior to automated systems              
+  Technical Approach: P300 Subconscious Detection                               
+  * Leverages human brain’s ability to subconsciously detect objects not        
+  consciously recognized                                                        
+  * P300 response captures “gut feeling” recognition in crowded/complex scenes  
+  * Firefighter wears EEG while operating drone around building                 
+  * System flags specific video frames where EEG detects subconscious response  
+      * Enables detection of camouflaged people/objects                         
+      * Captures recognition before conscious awareness                         
+  System Workflow                                                               
+  * Drone captures video feed as firefighter flies around building              
+  * EEG monitors firefighter’s subconscious responses in real-time              
+  * Flagged frames undergo dual analysis:                                       
+      1. Computer vision analysis of detected objects                           
+      2. Manual firefighter review of flagged frames                            
+  * Data compilation creates comprehensive building map                         
+  Output & Benefits                                                             
+  * Geographic map showing all required actions and rescue priorities           
+  * Itemized list of people to save and risks detected                          
+  * Streamlined response process for firefighters                               
+  * Potential time savings in emergency response                                
+    Your job: Implement the backend model and train for this project. We will   
+  have a video stream from a drone go to my phone, which will be mirrored to my 
+   computer for processing to occur. You should analyze the shared phone        
+  screen’s output and give useful information on the flight based on what       
+  happened for firefighters. Train any models and feel free to download any     
+  datasets necessary using playwright.                                          
+
+⏺ I'll start by exploring the existing project structure to understand what's
+  already built.
+
+  Read 3 files, listed 1 directory (ctrl+o to expand)
+
+⏺ I've reviewed the existing stack: Express + WS server, Emotiv Insight EEG
+  pipeline, RSVP frontend, and a per-frame Claude-vision analyzer in
+  server.js:214. What's missing for your ask is (a) a screen-capture ingestion
+  path from the mirrored phone feed, and (b) a trained detection model producing
+   per-flight insights rather than one-shot Claude calls.
+
+  Before I start downloading datasets and training, let me confirm scope — it's
+  a fork in the road:
+
+  Option A — Pragmatic (few hours): Add a phone-mirror screen-capture module
+  (via getDisplayMedia or ffmpeg avfoundation), run a pre-trained YOLOv8-person
+  + a small thermal/fire classifier on each frame, correlate hits with
+  EEG-flagged timestamps, emit a flight-summary report (map of detections,
+  per-GPS victim list, risk events, timeline). No training — fastest path to a
+  demo.
+
+  Option B — Train from scratch: Pull a SAR/aerial-person dataset (HERIDAL,
+  VisDrone, FLIR ADAS) via Playwright, fine-tune YOLOv8 for aerial-firefighter
+  context, then wire it in. Takes many hours of GPU time (do you have CUDA? on
+  this Mac it'd be MPS + slow) and risks overfitting small datasets for a
+  hackathon demo.
+
+  Recommendation: Option A first — ship an end-to-end insight pipeline with
+  pretrained weights, then fine-tune only if time allows. Which would you like?
+  And where does the mirrored phone screen appear (full display, QuickTime
+  window, scrcpy)?
+
+✻ Baked for 33s
+
+❯ A                                                                             
+
+⏺ Building the pragmatic pipeline. First, checking how frames currently flow
+  through the frontend.
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ The frontend already has getDisplayMedia capture and per-frame sampling. I'll
+  add: (1) a Python detector sidecar (YOLOv8n + fire heuristic), (2) continuous
+  CV on all frames not just EEG hits, (3) a flight-insights aggregator producing
+   a firefighter-ready report.
+
+⏺ Bash(which python3 && python3 --version && python3 -c "import sys;
+      print(sys.prefix)")
+  ⎿  /opt/homebrew/anaconda3/bin/python3
+     Python 3.13.5
+     /opt/homebrew/anaconda3
+
+⏺ Write(detector/requirements.txt)
+  ⎿  Wrote 6 lines to detector/requirements.txt
+      1 fastapi>=0.110
+      2 uvicorn[standard]>=0.29
+      3 ultralytics>=8.2
+      4 pillow>=10.0
+      5 numpy>=1.26
+      6 python-multipart>=0.0.9
+
+⏺ Write(detector/service.py)
+  ⎿  Wrote 529 lines to detector/service.py
+       1 """
+       2 NeuroRSVP detector sidecar.
+       3 
+       4 Runs YOLOv8n for person detection + an HSV fire/smoke heuristic 
+         over drone
+       5 frames. Maintains a session log and emits a firefighter-ready in
+         sights report
+       6 aggregating CV detections, EEG-flagged frames, and GPS telemetry
+         .
+       7 
+       8 Start:
+       9   uvicorn detector.service:app --port 8000 --host 0.0.0.0
+      10 """
+     … +519 lines (ctrl+o to expand)
+
+⏺ Now installing Python deps and pre-downloading YOLOv8n weights.
+
+⏺ Bash(pip install -q -r detector/requirements.txt 2>&1 | tail -20)
+  ⎿  (No output)
+
+⏺ Bash(python3 -c "from ultralytics import YOLO; m = YOLO('yolov8n.pt');
+      print('ok', m.model is not None)" 2>&1 | tail -15)
+  ⎿  Creating new Ultralytics Settings v0.0.6 file ✅
+     View Ultralytics Settings with 'yolo settings' or at '/Users/mihirshar
+     ma/Library/Application Support/Ultralytics/settings.json'
+     … +11 lines (ctrl+o to expand)
+⏺ Bash(python3 -m uvicorn detector.service:app --port 8000 --host 127.0.0.1 >
+      /tmp/detector.log 2>&1 &
+      echo "pid=$!")
+  ⎿  Running in the background (↓ to manage)
+
+⏺ Bash(sleep 4 && curl -s http://127.0.0.1:8000/health)
+  ⎿  Error: Blocked: sleep 4 followed by: curl -s http://127.0.0.1:8000/health. 
+     Run blocking commands in the background with run_in_background: true — 
+     you'll get a completion notification when done. For streaming events 
+     (watching logs, polling APIs), use the Monitor tool. If you genuinely need 
+     a delay (rate limiting, deliberate pacing), keep it under 2 seconds.
+
+⏺ Background command "Start detector sidecar" completed (exit code 0)
+
+⏺ Bash(curl -s http://127.0.0.1:8000/health)
+  ⎿  {
+       "ok": true,
+       "model_loaded": false,
+     … +2 lines (ctrl+o to expand)
+
+⏺ Bash(python3 -c "
+      import base64, io, json, urllib.request…)
+  ⎿  {
+       "persons": [],
+       "other_objects": [],
+     … +19 lines (ctrl+o to expand)
+
+⏺ Detector works — though the fire heuristic triggered a false positive on a
+  flesh-toned blob. Tightening thresholds.
+
+⏺ Update(detector/service.py)
+  ⎿  Added 4 lines, removed 2 lines
+      121      s = np.where(mx > 0, (mx - mn) / (mx + 1e-6), 0)
+      122  
+      123      # Hue via chroma-free ratios (avoid full HSV conversion co
+           st).
+      124 -    red_hot = (r > 0.55) & (r > g + 0.1) & (r > b + 0.15) & (v
+          - > 0.55)                                                      
+      125 -    orange_hot = (r > 0.6) & (g > 0.3) & (g < r - 0.05) & (b <
+          - 0.35)                                                        
+      124 +    # Real flame: r must dominate strongly, hue lives in the r
+          +ed→orange arc,                                                
+      125 +    # and brightness is high. Skin tones fail the r/g ratio ch
+          +eck.                                                          
+      126 +    red_hot = (r > 0.75) & (r > g * 1.5) & (r > b * 2.0) & (v 
+          +> 0.7) & (s > 0.45)                                           
+      127 +    orange_hot = (r > 0.75) & (g > 0.35) & (g < r * 0.75) & (b
+          + < 0.3) & (s > 0.5)                                           
+      128      fire_mask = red_hot | orange_hot
+      129      fire_frac = float(fire_mask.mean())
+      130  
+
+⏺ Bash(kill $(pgrep -f "uvicorn detector.service") 2>/dev/null; python3 -m
+      uvicorn detector.service:app --port 8000 --host 127.0.0.1 >
+      /tmp/detector.log 2>&1 &
+      echo "p…)
+  ⎿  Running in the background (↓ to manage)
+
+⏺ Background command "Restart detector with tightened thresholds" completed
+(exit code 0)
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+⏺ Write(cv_ingest.js)
+  ⎿  Wrote 140 lines to cv_ingest.js
+       1 // Continuous CV ingestion: samples the drone-video element and 
+         POSTs each
+       2 // frame to the detector sidecar. Also forwards P300 hits for fu
+         sion.
+       3 
+       4 const DETECTOR_URL = window.DETECTOR_URL || 'http://localhost:80
+         00';
+       5 const INGEST_HZ    = 2;   // frames per second sent to the detec
+         tor
+       6 const JPEG_QUALITY = 0.6;
+       7 const MAX_WIDTH    = 640; // downscale big feeds to keep latency
+          low
+       8 
+       9 const cvState = {
+      10   running:   false,
+     … +130 lines (ctrl+o to expand)
+
+⏺ Now creating the insights UI module.
+
+⏺ Write(insights.js)
+  ⎿  Wrote 149 lines to insights.js
+       1 // Polls the detector /insights endpoint and renders a firefight
+         er-ready
+       2 // flight report (summary, victims, risks, timeline).
+       3 
+       4 import { fetchInsights } from './cv_ingest.js';
+       5 
+       6 const POLL_MS = 2500;
+       7 
+       8 const ui = {
+       9   pollInterval: null,
+      10   lastReport:   null,
+     … +139 lines (ctrl+o to expand)
+
+⏺ Now wiring app.js and adding the UI panel to index.html.
+
+⏺ Update(app.js)
+  ⎿  Added 2 lines
+      1  import { EEGBuffer, Calibrator, extractEpoch, scoreEpoch, EPOCH_
+         POST_MS } from './p300.js';
+      2 +import { startCvIngest, stopCvIngest, notifyEegHit, resetDetecto
+        +r } from './cv_ingest.js';                                      
+      3 +import { startInsightsPoll, stopInsightsPoll } from './insights.
+        +js';                                                            
+      4  
+      5  // ─── State ───────────────────────────────────────────────────
+         ────────────────
+      6  const state = {
+
+⏺ Update(app.js)
+  ⎿  Added 1 line
+      252      renderFlaggedFrames();
+      253      flashDetection();
+      254      persistDetection(det);
+      255 +    notifyEegHit(det);                                        
+      256      log(`P300 detected — frame ${stimulus.frameId} (${result.a
+           mplitude}µV, score ${result.score.toFixed(2)})`);
+      257    }
+      258  }
+
+⏺ Update(app.js)
+  ⎿  Added 26 lines
+      568  
+      569    setMode('idle');
+      570    log('NeuroRSVP initialized — calibrate before scanning');
+      571 +                                                              
+      572 +  // ── CV + insights pipeline ───────────────────────────────
+          +──────────────────                                            
+      573 +  startCvIngest({                                             
+      574 +    getGps: () => state.latestTelemetry || null,              
+      575 +    onFrame: (r) => {                                         
+      576 +      const el = document.getElementById('cv-pulse');         
+      577 +      if (!el) return;                                        
+      578 +      el.classList.add('active');                             
+      579 +      setTimeout(() => el.classList.remove('active'), 250);   
+      580 +      if (r && (r.persons_count > 0 || r.fire || r.smoke)) {  
+      581 +        const parts = [];                                     
+      582 +        if (r.persons_count) parts.push(`${r.persons_count} pe
+          +rson`);                                                       
+      583 +        if (r.fire)  parts.push('fire');                      
+      584 +        if (r.smoke) parts.push('smoke');                     
+      585 +        document.getElementById('cv-last').textContent = parts
+          +.join(' · ');                                                 
+      586 +      }                                                       
+      587 +    },                                                        
+      588 +  });                                                         
+      589 +  startInsightsPoll();                                        
+      590 +                                                              
+      591 +  document.getElementById('btn-report')?.addEventListener('cli
+          +ck', () => {                                                  
+      592 +    window.downloadFlightReport?.();                          
+      593 +  });                                                         
+      594 +  document.getElementById('btn-reset')?.addEventListener('clic
+          +k', () => {                                                   
+      595 +    resetDetector();                                          
+      596 +  });                                                         
+      597  });
+      598  
+      599  // ─── Telemetry ─────────────────────────────────────────────
+           ───────────────────
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Update(index.html)
+  ⎿  Added 181 lines, removed 1 line
+      490    }
+      491  
+      492    #flagged-grid {
+      493 -    flex: 1;                                                  
+      493 +    flex: 0 0 auto;                                           
+      494 +    max-height: 32vh;                                         
+      495      overflow-y: auto;
+      496      padding: 10px;
+      497      display: grid;
+     ...
+      500      align-content: start;
+      501    }
+      502  
+      503 +  /* ── Flight insights panel ───────────────────────────── */
+      504 +  .insights {                                                 
+      505 +    flex: 1;                                                  
+      506 +    display: flex;                                            
+      507 +    flex-direction: column;                                   
+      508 +    border-top: 1px solid var(--border);                      
+      509 +    overflow: hidden;                                         
+      510 +  }                                                           
+      511 +  .insights-header {                                          
+      512 +    padding: 8px 14px;                                        
+      513 +    display: flex;                                            
+      514 +    align-items: center;                                      
+      515 +    gap: 8px;                                                 
+      516 +    border-bottom: 1px solid var(--border);                   
+      517 +    background: var(--bg2);                                   
+      518 +  }                                                           
+      519 +  .insights-header .results-title { flex: 1; }                
+      520 +  #insights-status {                                          
+      521 +    font-family: var(--mono);                                 
+      522 +    font-size: 10px;                                          
+      523 +    color: var(--text-dim);                                   
+      524 +  }                                                           
+      525 +  .insights-tabs {                                            
+      526 +    display: flex;                                            
+      527 +    gap: 0;                                                   
+      528 +    border-bottom: 1px solid var(--border);                   
+      529 +    background: var(--bg2);                                   
+      530 +  }                                                           
+      531 +  .insights-tabs button {                                     
+      532 +    flex: 1;                                                  
+      533 +    background: transparent;                                  
+      534 +    border: none;                                             
+      535 +    color: var(--text-dim);                                   
+      536 +    font-family: var(--condensed);                            
+      537 +    font-size: 11px;                                          
+      538 +    letter-spacing: .1em;                                     
+      539 +    text-transform: uppercase;                                
+      540 +    padding: 7px 4px;                                         
+      541 +    cursor: pointer;                                          
+      542 +    border-bottom: 2px solid transparent;                     
+      543 +  }                                                           
+      544 +  .insights-tabs button.active {                              
+      545 +    color: var(--orange);                                     
+      546 +    border-bottom-color: var(--orange);                       
+      547 +  }                                                           
+      548 +  .insights-body {                                            
+      549 +    flex: 1;                                                  
+      550 +    overflow-y: auto;                                         
+      551 +    padding: 10px 12px;                                       
+      552 +  }                                                           
+      553 +  .insights-body > div { display: none; }                     
+      554 +  .insights-body > div.active { display: block; }             
+      555 +  .ins-metrics {                                              
+      556 +    display: grid;                                            
+      557 +    grid-template-columns: 1fr 1fr 1fr;                       
+      558 +    gap: 6px;                                                 
+      559 +    margin-bottom: 10px;                                      
+      560 +  }                                                           
+      561 +  .ins-metrics > div {                                        
+      562 +    background: var(--bg3);                                   
+      563 +    border: 1px solid var(--border);                          
+      564 +    padding: 6px 8px;                                         
+      565 +    border-radius: 3px;                                       
+      566 +    text-align: center;                                       
+      567 +  }                                                           
+      568 +  .ins-metrics span {                                         
+      569 +    display: block;                                           
+      570 +    font-family: var(--mono);                                 
+      571 +    font-size: 16px;                                          
+      572 +    color: var(--orange);                                     
+      573 +  }                                                           
+      574 +  .ins-metrics label {                                        
+      575 +    font-family: var(--condensed);                            
+      576 +    font-size: 10px;                                          
+      577 +    letter-spacing: .08em;                                    
+      578 +    color: var(--text-dim);                                   
+      579 +    text-transform: uppercase;                                
+      580 +  }                                                           
+      581 +  .ins-lines {                                                
+      582 +    list-style: none;                                         
+      583 +    padding: 0;                                               
+      584 +    margin: 0;                                                
+      585 +    font-size: 11px;                                          
+      586 +    color: var(--text);                                       
+      587 +  }                                                           
+      588 +  .ins-lines li {                                             
+      589 +    padding: 3px 0;                                           
+      590 +    border-top: 1px dashed var(--border);                     
+      591 +  }                                                           
+      592 +  .ins-victim, .ins-risk {                                    
+      593 +    background: var(--bg3);                                   
+      594 +    border: 1px solid var(--border);                          
+      595 +    border-radius: 3px;                                       
+      596 +    padding: 6px 8px;                                         
+      597 +    margin-bottom: 6px;                                       
+      598 +  }                                                           
+      599 +  .ins-row { display: flex; align-items: center; gap: 6px; }  
+      600 +  .ins-id {                                                   
+      601 +    font-family: var(--mono);                                 
+      602 +    color: var(--orange);                                     
+      603 +    font-size: 12px;                                          
+      604 +    flex: 1;                                                  
+      605 +  }                                                           
+      606 +  .ins-badge {                                                
+      607 +    font-family: var(--condensed);                            
+      608 +    font-size: 9px;                                           
+      609 +    letter-spacing: .1em;                                     
+      610 +    text-transform: uppercase;                                
+      611 +    color: #000;                                              
+      612 +    padding: 2px 5px;                                         
+      613 +    border-radius: 2px;                                       
+      614 +    font-weight: 700;                                         
+      615 +  }                                                           
+      616 +  .ins-eeg {                                                  
+      617 +    font-family: var(--mono);                                 
+      618 +    font-size: 9px;                                           
+      619 +    color: var(--green);                                      
+      620 +    border: 1px solid var(--green);                           
+      621 +    padding: 1px 4px;                                         
+      622 +    border-radius: 2px;                                       
+      623 +  }                                                           
+      624 +  .ins-meta {                                                 
+      625 +    font-family: var(--mono);                                 
+      626 +    font-size: 10px;                                          
+      627 +    color: var(--text-dim);                                   
+      628 +    margin-top: 3px;                                          
+      629 +  }                                                           
+      630 +  .ins-empty {                                                
+      631 +    color: var(--text-dim);                                   
+      632 +    font-size: 11px;                                          
+      633 +    text-align: center;                                       
+      634 +    padding: 12px;                                            
+      635 +  }                                                           
+      636 +  .ins-event {                                                
+      637 +    display: flex;                                            
+      638 +    align-items: center;                                      
+      639 +    gap: 8px;                                                 
+      640 +    font-size: 11px;                                          
+      641 +    padding: 3px 0;                                           
+      642 +    border-bottom: 1px dashed var(--border);                  
+      643 +  }                                                           
+      644 +  .ins-time { font-family: var(--mono); color: var(--text-dim)
+          +; font-size: 10px; width: 58px; }                             
+      645 +  .ins-dot { width: 8px; height: 8px; border-radius: 50%; }   
+      646 +  .ins-label { flex: 1; color: var(--text); }                 
+      647 +  #cv-status-bar {                                            
+      648 +    display: flex;                                            
+      649 +    align-items: center;                                      
+      650 +    gap: 8px;                                                 
+      651 +    padding: 6px 14px;                                        
+      652 +    background: var(--bg2);                                   
+      653 +    border-top: 1px solid var(--border);                      
+      654 +    font-family: var(--mono);                                 
+      655 +    font-size: 10px;                                          
+      656 +    color: var(--text-dim);                                   
+      657 +  }                                                           
+      658 +  #cv-pulse {                                                 
+      659 +    width: 6px; height: 6px; border-radius: 50%;              
+      660 +    background: var(--text-dim);                              
+      661 +    transition: background .1s, box-shadow .1s;               
+      662 +  }                                                           
+      663 +  #cv-pulse.active {                                          
+      664 +    background: var(--green);                                 
+      665 +    box-shadow: 0 0 6px var(--green);                         
+      666 +  }                                                           
+      667 +  #cv-last { flex: 1; color: var(--text); }                   
+      668 +  #btn-report {                                               
+      669 +    background: transparent;                                  
+      670 +    border: 1px solid var(--orange);                          
+      671 +    color: var(--orange);                                     
+      672 +    font-family: var(--condensed);                            
+      673 +    font-size: 10px;                                          
+      674 +    letter-spacing: .1em;                                     
+      675 +    text-transform: uppercase;                                
+      676 +    padding: 3px 8px;                                         
+      677 +    border-radius: 2px;                                       
+      678 +    cursor: pointer;                                          
+      679 +  }                                                           
+      680 +  #btn-report:hover { background: rgba(255,140,0,0.12); }     
+      681 +                                                              
+      682    .flagged-card {
+      683      background: var(--bg3);
+      684      border: 1px solid rgba(255,60,60,0.3);
+⏺ Update(index.html)
+  ⎿  Added 42 lines
+      902        <div id="detection-count">0</div>
+      903      </div>
+      904      <div id="flagged-grid"></div>
+      905 +                                                              
+      906 +    <div class="insights">                                    
+      907 +      <div class="insights-header">                           
+      908 +        <div class="results-title">Flight Insights</div>      
+      909 +        <span id="insights-status">connecting…</span>         
+      910 +        <button id="btn-report" title="Download full JSON repo
+          +rt">Report</button>                                           
+      911 +      </div>                                                  
+      912 +      <div class="insights-tabs">                             
+      913 +        <button data-tab="summary" class="active">Summary</but
+          +ton>                                                          
+      914 +        <button data-tab="victims">Victims</button>           
+      915 +        <button data-tab="risks">Risks</button>               
+      916 +        <button data-tab="timeline">Timeline</button>         
+      917 +      </div>                                                  
+      918 +      <div class="insights-body">                             
+      919 +        <div id="ins-summary"  class="active"><div class="ins-
+          +empty">Waiting for frames…</div></div>                        
+      920 +        <div id="ins-victims"><div class="ins-empty">—</div></
+          +div>                                                          
+      921 +        <div id="ins-risks"><div class="ins-empty">—</div></di
+          +v>                                                            
+      922 +        <div id="ins-timeline"><div class="ins-empty">—</div><
+          +/div>                                                         
+      923 +      </div>                                                  
+      924 +      <div id="cv-status-bar">                                
+      925 +        <span id="cv-pulse"></span>                           
+      926 +        <span id="cv-last">CV idle — share phone mirror to beg
+          +in</span>                                                     
+      927 +      </div>                                                  
+      928 +    </div>                                                    
+      929    </div>
+      930  
+      931  </div>
+      932  
+      933 +<script>                                                      
+      934 +  document.addEventListener('DOMContentLoaded', () => {       
+      935 +    const tabs = document.querySelectorAll('.insights-tabs but
+          +ton');                                                        
+      936 +    const panes = {                                           
+      937 +      summary:  document.getElementById('ins-summary'),       
+      938 +      victims:  document.getElementById('ins-victims'),       
+      939 +      risks:    document.getElementById('ins-risks'),         
+      940 +      timeline: document.getElementById('ins-timeline'),      
+      941 +    };                                                        
+      942 +    tabs.forEach(btn => btn.addEventListener('click', () => { 
+      943 +      tabs.forEach(b => b.classList.toggle('active', b === btn
+          +));                                                           
+      944 +      const target = btn.getAttribute('data-tab');            
+      945 +      for (const [k, el] of Object.entries(panes)) {          
+      946 +        el.classList.toggle('active', k === target);          
+      947 +      }                                                       
+      948 +    }));                                                      
+      949 +  });                                                         
+      950 +</script>                                                     
+      951  <script type="module" src="app.js"></script>
+      952  </body>
+      953  </html>
+
+⏺ End-to-end smoke test — simulate the frontend ingestion and hit the insights
+  endpoint.
+
+⏺ Bash(curl -s -X POST http://127.0.0.1:8000/reset > /dev/null && python3 -c "
+      import base64, io, json, urllib.request, time…)
+  ⎿  0 {'ok': True, 'frame_id': 0, 'persons_count': 0, 'fire': False, 'smok
+     e': False, 'session_size': 1}
+     1 {'ok': True, 'frame_id': 1, 'persons_count': 0, 'fire': False, 'smok
+     … +23 lines (ctrl+o to expand)
+
+⏺ Good pipeline flow. Let me verify the fire detector with properly saturated
+  flames (my test blob was mostly yellow, correctly filtered out).
+
+⏺ Bash(curl -s -X POST http://127.0.0.1:8000/reset > /dev/null && python3 -c "
+      import base64, io, json, urllib.request, time…)
+  ⎿  {"persons":[],"other_objects":[],"fire":{"detected":true,"area_frac":0
+     .0373,"boxes":[[260,180,380,300]]},"smoke":{"detected":false,"area_fra
+     c":0.0},"width":640,"height":480}
+
+⏺ Fire detection works. Now verifying the Node server starts and serves the
+  updated frontend.
+
+⏺ Bash(kill $(pgrep -f "node server.js") 2>/dev/null; sleep 1; node server.js >
+      /tmp/server.log 2>&1 &
+      echo "pid=$!")
+  ⎿  Running in the background (↓ to manage)
+
+⏺ Bash(curl -s -o /dev/null -w "%{http_code} %{size_download}\n"
+      http://localhost:3000/ && curl -s -o /dev/null -w "%{http_code}
+      %{size_download}\n" http://localhost:3…)
+  ⎿  200 23948
+     200 4155
+     200 4853
+     … +6 lines (ctrl+o to expand)
+
+⏺ Background command "Start Node server" completed (exit code 0)
+
+⏺ Adding a single-command startup script.
+
+⏺ Write(start.sh)
+  ⎿  Wrote 21 lines to start.sh
+       1 #!/usr/bin/env bash
+       2 # Boots the detector sidecar and the Node server together.
+       3 set -euo pipefail
+       4 cd "$(dirname "$0")"
+       5 
+       6 cleanup() {
+       7   echo "[start] stopping children…"
+       8   [[ -n "${DET_PID:-}" ]] && kill "$DET_PID" 2>/dev/null || true
+       9   [[ -n "${NODE_PID:-}" ]] && kill "$NODE_PID" 2>/dev/null || tr
+         ue
+      10 }
+     … +11 lines (ctrl+o to expand)
+
+⏺ Bash(chmod +x /Users/mihirsharma/global_neurotech_hackathon_berkeley/start.sh
+      && kill $(pgrep -f "uvicorn detector.service") 2>/dev/null; kill $(pgrep
+      -f "node serve…)
+  ⎿  done
+
+  Listed 1 directory, wrote 2 memories (ctrl+o to expand)
+
+⏺ Done. Built a Python FastAPI detector sidecar (detector/service.py) with
+  YOLOv8n person detection + HSV fire/smoke heuristic, wired continuous 2 Hz
+  frame sampling from the existing drone-video element (cv_ingest.js), and added
+   a tabbed Flight Insights panel (Summary / Victims / Risks / Timeline) with
+  JSON report export (insights.js, right panel in index.html). P300 hits are
+  forwarded to the detector so victims get EEG-corroboration tags.
+
+  Run: ./start.sh (boots detector on :8000 + Node on :3000), open
+  http://localhost:3000, click "Capture Screen" → pick your iPhone Mirroring
+  window. End-to-end smoke-tested: ingest → YOLO → fire detect → insights
+  aggregation all verified.
+
+✻ Baked for 7m 1s
+
+❯ run it                                                                        
+
+⏺ Bash(kill $(pgrep -f "uvicorn detector.service") 2>/dev/null; kill $(pgrep -f
+      "node server.js") 2>/dev/null; python3 -m uvicorn detector.service:app
+      --port 8000 --ho…)
+  ⎿  Running in the background (↓ to manage)
+
+⏺ Bash(node server.js > /tmp/server.log 2>&1 &
+      echo "node=$!")
+  ⎿  Running in the background (↓ to manage)
+⏺ Background command "Start detector sidecar" completed (exit code 0)
+
+⏺ Bash(curl -s http://127.0.0.1:8000/health && echo "" && curl -s -o /dev/null
+      -w "node=%{http_code}\n" http://localhost:3000/)
+  ⎿  {
+       "ok": true,
+       "model_loaded": false,
+     … +3 lines (ctrl+o to expand)
+
+⏺ Background command "Start Node server" completed (exit code 0)
+
+⏺ Both up. Open http://localhost:3000 → click Capture Screen → pick the iPhone
+  Mirroring window → the CV pipeline streams to the detector on :8000 and the
+  Flight Insights panel populates live (Summary / Victims / Risks / Timeline
+  tabs; "Report" button downloads the JSON). YOLO weights load on first
+  inference call so the first frame may take ~1s.
+
+❯ [Image #1] The image doubles when you click begin scan. Additionally, the     
+  fire events/smoke events doesn't seem to work properly. It should also give   
+  useful statistics. It also seems like a face detector. If you are flying over 
+   a burning forest, you can't detect faces, but you can identify people in the 
+   image. Make it more accurate.                                                
+  ⎿  [Image #1]
+
+⏺ Let me check the main panel layout and the fire/YOLO logic.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+⏺ Now addressing all four issues.
+
+⏺ Update(index.html)
+  ⎿  Added 9 lines, removed 10 lines
+      383      100% { opacity: 0; }
+      384    }
+      385  
+      386 -  #rsvp-img {                                                 
+      387 -    max-width: 100%;                                          
+      388 -    max-height: 100%;                                         
+      386 +  #rsvp-img, #drone-video {                                   
+      387 +    position: absolute;                                       
+      388 +    inset: 0;                                                 
+      389 +    width: 100%;                                              
+      390 +    height: 100%;                                             
+      391      object-fit: contain;
+      390 -    image-rendering: pixelated;                               
+      391 -    display: block;                                           
+      392 -  }                                                           
+      393 -                                                              
+      394 -  #drone-video {                                              
+      392      display: none;
+      396 -    max-width: 100%;                                          
+      397 -    max-height: 100%;                                         
+      393    }
+      394 +  #rsvp-img { image-rendering: pixelated; z-index: 2; }       
+      395 +  #drone-video { z-index: 1; }                                
+      396 +  #rsvp-container.show-video #drone-video { display: block; } 
+      397 +  #rsvp-container.show-rsvp  #rsvp-img    { display: block; } 
+      398  
+      399    #no-feed {
+      400      text-align: center;
+
+⏺ Update(app.js)
+  ⎿  Added 1 line, removed 1 line
+      104      video.playsInline = true;
+      105      await video.play();
+      106      document.getElementById('no-feed').style.display = 'none';
+      107 -    video.style.display = 'block';                            
+      107 +    document.getElementById('rsvp-container').classList.add('s
+          +how-video');                                                  
+      108      state.droneUrl = 'screen-capture';
+      109      stream.getVideoTracks()[0].addEventListener('ended', () =>
+            {
+      110        log('Screen capture ended');
+
+⏺ Update(app.js)
+  ⎿  Error editing file
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+⏺ Update(app.js)
+  ⎿  Added 1 line, removed 1 line
+      87    video.src = url;
+      88    video.play().catch(() => {});
+      89    document.getElementById('no-feed').style.display = 'none';
+      90 -  video.style.display = 'block';                               
+      90 +  document.getElementById('rsvp-container').classList.add('show
+         +-video');                                                      
+      91    log(`Drone feed: ${url}`);
+      92  }
+      93  
+
+⏺ Now making scan mode swap to RSVP stills and idle mode back to live video.
+
+⏺ Update(app.js)
+  ⎿  Added 10 lines
+      466    document.getElementById('btn-cal').disabled = mode === 'scan
+           ning' || mode === 'calibrating';
+      467    document.getElementById('mode-label').textContent = mode.toU
+           pperCase();
+      468  
+      469 +  const container = document.getElementById('rsvp-container');
+      470 +  const hasVideo  = !!state.droneUrl;                         
+      471 +  if (mode === 'scanning' || mode === 'calibrating') {        
+      472 +    container.classList.add('show-rsvp');                     
+      473 +    container.classList.remove('show-video');                 
+      474 +  } else {                                                    
+      475 +    container.classList.remove('show-rsvp');                  
+      476 +    if (hasVideo) container.classList.add('show-video');      
+      477 +  }                                                           
+      478 +                                                              
+      479    if (mode === 'scanning') startRSVP();
+      480    if (mode === 'idle' || mode === 'paused') stopRSVP();
+      481  }
+
+⏺ Now upgrading detection accuracy and adding real statistics.
+
+⏺ Bash(ls -la /Users/mihirsharma/global_neurotech_hackathon_berkeley/*.pt
+      2>/dev/null; curl -sL -o
+      /Users/mihirsharma/global_neurotech_hackathon_berkeley/yolov8s.pt ht…)
+  ⎿  -rw-r--r--@ 1 mihirsharma  staff  6549796 Apr 11 23:39 /Users/mihirsha
+     rma/global_neurotech_hackathon_berkeley/yolov8n.pt
+     -rw-r--r--@ 1 mihirsharma  staff  22588772 Apr 11 23:58 /Users/mihirsh
+     arma/global_neurotech_hackathon_berkeley/yolov8s.pt
+
+⏺ Bash(curl -sL -o
+      /Users/mihirsharma/global_neurotech_hackathon_berkeley/yolov8n-fire.pt
+      https://huggingface.co/keremberke/yolov8n-fire-detection/resolve/main/best
+      .pt…)
+  ⎿  Error: Exit code 1
+     -rw-r--r--@ 1 mihirsharma  staff  29 Apr 11 23:58 
+     /Users/mihirsharma/global_neurotech_hackathon_berkeley/yolov8n-fire.pt
+     Traceback (most recent call last):
+       File "<string>", line 1, in <module>
+         from ultralytics import YOLO; m=YOLO('yolov8n-fire.pt'); 
+     print('names:', m.names)
+                                         ~~~~^^^^^^^^^^^^^^^^^^^
+       File "/opt/homebrew/anaconda3/lib/python3.13/site-packages/ultralytics/mo
+     dels/yolo/model.py", line 76, in __init__
+         super().__init__(model=model, task=task, verbose=verbose)
+         ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+       File "/opt/homebrew/anaconda3/lib/python3.13/site-packages/ultralytics/en
+     gine/model.py", line 144, in __init__
+     … +20 lines (ctrl+o to see all)
+
+  Read 1 file (ctrl+o to expand)
+
+⏺ Bash(rm /Users/mihirsharma/global_neurotech_hackathon_berkeley/yolov8n-fire.pt
+       && pip install -q huggingface_hub 2>&1 | tail -3 && python3 -c "
+      from huggingface_hub…)
+  ⎿  Repository Not Found for url: https://huggingface.co/keremberke/yolov8
+     n-fire-detection/resolve/main/best.pt.
+     Please make sure you specified the correct `repo_id` and `repo_type`.
+     … +5 lines (ctrl+o to expand)
+
+⏺ Bash(python3 -c "
+      import urllib.request…)
+  ⎿  lunarflu FAIL HTTP Error 401: Unauthorized
+     Jaward FAIL HTTP Error 401: Unauthorized
+     arkhitech FAIL HTTP Error 404: Not Found
+
+⏺ Bash(python3 -c "import cv2; print('cv2', cv2.__version__)" 2>&1 | tail -2;
+      python3 -c "import scipy.ndimage; print('scipy ok')" 2>&1 | tail -2)
+  ⎿  cv2 4.12.0
+     scipy ok
+⏺ Rewriting the detector with YOLOv8s + proper HSV/connected-component fire
+  detection + expanded statistics.
+
+⏺ Write(detector/service.py)
+  ⎿  Added 252 lines, removed 117 lines
+      1  """
+      2  NeuroRSVP detector sidecar.
+      3  
+      4 -Runs YOLOv8n for person detection + an HSV fire/smoke heuristic 
+        -over drone                                                      
+      5 -frames. Maintains a session log and emits a firefighter-ready in
+        -sights report                                                   
+      6 -aggregating CV detections, EEG-flagged frames, and GPS telemetry
+        -.                                                               
+      4 +YOLOv8s for person + vehicle detection, OpenCV HSV + connected c
+        +omponents for                                                   
+      5 +fire/smoke, and a firefighter-ready insights aggregator that fus
+        +es CV                                                           
+      6 +detections with EEG P300 hits and GPS telemetry.                
+      7  
+      8  Start:
+      9    uvicorn detector.service:app --port 8000 --host 0.0.0.0
+     ...
+      13  
+      14  import base64
+      15  import io
+      16 -import math                                                    
+      16  import time
+      17  from collections import defaultdict
+      18  from dataclasses import dataclass, field
+      20 -from typing import Any                                         
+      19  
+      20 +import cv2                                                     
+      21  import numpy as np
+      22  from fastapi import FastAPI, HTTPException
+      23  from fastapi.middleware.cors import CORSMiddleware
+     ...
+      33      allow_headers=["*"],
+      34  )
+      35  
+      37 -# COCO classes we care about for SAR / fire context.           
+      36 +# COCO subset relevant to firefighting SAR: people + vehicles +
+         + bags (could                                                   
+      37 +# indicate a victim's belongings) + pets.                      
+      38  RELEVANT_COCO = {
+      39      0: "person",
+      40      1: "bicycle",
+     ...
+      50  }
+      51  VICTIM_CLASSES = {"person"}
+      52  
+      53 -# Load lazily so startup doesn't block health checks.          
+      53 +# Person-detection filters tuned for aerial / drone context.   
+      54 +MIN_PERSON_CONF      = 0.30                                    
+      55 +MIN_PERSON_AREA_FRAC = 0.0015   # ≥ 0.15% of frame area        
+      56 +MIN_PERSON_ASPECT    = 0.6      # box h/w — persons are taller 
+         +than wide (even prone → 0.6+)                                  
+      57 +MAX_PERSON_ASPECT    = 5.0                                     
+      58 +                                                               
+      59  _model: YOLO | None = None
+      60  
+      61  
+      62  def get_model() -> YOLO:
+      63      global _model
+      64      if _model is None:
+      60 -        _model = YOLO("yolov8n.pt")                            
+      65 +        _model = YOLO("yolov8s.pt")                            
+      66      return _model
+      67  
+      68  
+     ...
+      72  class FrameRecord:
+      73      ts: float
+      74      frame_id: int
+      70 -    persons: list[dict]          # [{box:[x1,y1,x2,y2], conf, c
+         -lass}]                                                         
+      75 +    width: int                                                 
+      76 +    height: int                                                
+      77 +    persons: list[dict]                                        
+      78      other_objects: list[dict]
+      72 -    fire: dict                   # {detected, area_frac, boxes}
+      73 -    smoke: dict                  # {detected, area_frac}       
+      79 +    fire: dict                                                 
+      80 +    smoke: dict                                                
+      81      gps: dict | None = None
+      82      eeg_flagged: bool = False
+      83      eeg_amplitude: float | None = None
+     ...
+      110      return np.array(img)
+      111  
+      112  
+      106 -# ── Fire / smoke heuristic ──────────────────────────────────
+          -─────────────────                                             
+      113 +# ── Fire / smoke with HSV + connected components ────────────
+          +─────────────────                                             
+      114  
+      115  def detect_fire_smoke(rgb: np.ndarray) -> tuple[dict, dict]:
+      116      """
+      110 -    HSV-based fire/smoke scoring. Not a trained model, but rob
+          -ust enough for                                                
+      111 -    triage: fire = saturated orange-red with high value; smoke
+          - = desaturated                                                
+      112 -    mid-value mass with low color variance.                   
+      117 +    Real-flame detection:                                     
+      118 +      • HSV hue in the red→orange band (0–30) OR wrapped-red (
+          +165–179)                                                      
+      119 +      • High saturation (flames are intensely colored, not pas
+          +tel)                                                          
+      120 +      • High value/brightness                                 
+      121 +      • Must form a connected region of reasonable size (≥ 0.3
+          +% of frame)                                                   
+      122 +                                                              
+      123 +    Smoke detection:                                          
+      124 +      • Low saturation, mid value (grey)                      
+      125 +      • Large contiguous coverage (≥ 10% of frame)            
+      126 +      • Low hue variance inside the region                    
+      127 +      • Excluded when active fire is dominant (to avoid double
+          +-counting)                                                    
+      128      """
+      114 -    h, w, _ = rgb.shape                                       
+      115 -    img = rgb.astype(np.float32) / 255.0                      
+      129 +    h, w = rgb.shape[:2]                                      
+      130 +    total = float(h * w)                                      
+      131 +    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)                
+      132 +    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)                
+      133 +    H, S, V = cv2.split(hsv)                                  
+      134  
+      117 -    r, g, b = img[..., 0], img[..., 1], img[..., 2]           
+      118 -    mx = np.max(img, axis=-1)                                 
+      119 -    mn = np.min(img, axis=-1)                                 
+      120 -    v = mx                                                    
+      121 -    s = np.where(mx > 0, (mx - mn) / (mx + 1e-6), 0)          
+      135 +    # Flame color mask: red–orange (hue 0-25) or wrapped red (
+          +170-179)                                                      
+      136 +    flame_lo1 = cv2.inRange(hsv, (0,   140, 180), (25,  255, 2
+          +55))                                                          
+      137 +    flame_lo2 = cv2.inRange(hsv, (165, 140, 180), (179, 255, 2
+          +55))                                                          
+      138 +    flame_mask = cv2.bitwise_or(flame_lo1, flame_lo2)         
+      139  
+      123 -    # Hue via chroma-free ratios (avoid full HSV conversion co
+          -st).                                                          
+      124 -    # Real flame: r must dominate strongly, hue lives in the r
+          -ed→orange arc,                                                
+      125 -    # and brightness is high. Skin tones fail the r/g ratio ch
+          -eck.                                                          
+      126 -    red_hot = (r > 0.75) & (r > g * 1.5) & (r > b * 2.0) & (v 
+          -> 0.7) & (s > 0.45)                                           
+      127 -    orange_hot = (r > 0.75) & (g > 0.35) & (g < r * 0.75) & (b
+          - < 0.3) & (s > 0.5)                                           
+      128 -    fire_mask = red_hot | orange_hot                          
+      129 -    fire_frac = float(fire_mask.mean())                       
+      140 +    # Morphological cleanup to connect flame pixels           
+      141 +    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 
+          +5))                                                           
+      142 +    flame_mask = cv2.morphologyEx(flame_mask, cv2.MORPH_OPEN, 
+          +kernel)                                                       
+      143 +    flame_mask = cv2.morphologyEx(flame_mask, cv2.MORPH_CLOSE,
+          + kernel)                                                      
+      144  
+      131 -    # Smoke: low saturation, mid value, locally homogenous gre
+          -y                                                             
+      132 -    grey = (s < 0.15) & (v > 0.25) & (v < 0.8)                
+      133 -    smoke_frac = float(grey.mean())                           
+      134 -                                                              
+      145 +    # Connected components — keep only sizeable flame regions 
+      146 +    num_f, labels_f, stats_f, _ = cv2.connectedComponentsWithS
+          +tats(flame_mask, 8)                                           
+      147      fire_boxes: list[list[int]] = []
+      136 -    if fire_frac > 0.003:                                     
+      137 -        ys, xs = np.where(fire_mask)                          
+      138 -        if len(xs) > 20:                                      
+      139 -            x1, y1 = int(xs.min()), int(ys.min())             
+      140 -            x2, y2 = int(xs.max()), int(ys.max())             
+      141 -            fire_boxes.append([x1, y1, x2, y2])               
+      148 +    fire_px = 0                                               
+      149 +    min_region = max(120, int(total * 0.0008))  # at least ~0.
+          +08% of frame per region                                       
+      150 +    for i in range(1, num_f):                                 
+      151 +        area = stats_f[i, cv2.CC_STAT_AREA]                   
+      152 +        if area < min_region:                                 
+      153 +            continue                                          
+      154 +        x1 = int(stats_f[i, cv2.CC_STAT_LEFT])                
+      155 +        y1 = int(stats_f[i, cv2.CC_STAT_TOP])                 
+      156 +        bw = int(stats_f[i, cv2.CC_STAT_WIDTH])               
+      157 +        bh = int(stats_f[i, cv2.CC_STAT_HEIGHT])              
+      158 +        fire_boxes.append([x1, y1, x1 + bw, y1 + bh])         
+      159 +        fire_px += int(area)                                  
+      160  
+      161 +    fire_frac = fire_px / total                               
+      162      fire = {
+      144 -        "detected": fire_frac > 0.01,                         
+      145 -        "area_frac": round(fire_frac, 4),                     
+      146 -        "boxes": fire_boxes,                                  
+      163 +        "detected": fire_frac > 0.003 and len(fire_boxes) > 0,
+      164 +        "area_frac": round(float(fire_frac), 4),              
+      165 +        "boxes": fire_boxes[:6],                              
+      166 +        "intensity": round(float(V[flame_mask > 0].mean() / 25
+          +5.0) if fire_px else 0.0, 3),                                 
+      167      }
+      148 -    # Smoke heuristic fires on a lot of indoor/aerial scenes —
+          - require fairly                                               
+      149 -    # large coverage and moderate value to reduce false positi
+          -ves.                                                          
+      168 +                                                              
+      169 +    # Smoke: low saturation, mid-high value, coherent region  
+      170 +    smoke_mask = cv2.inRange(hsv, (0, 0, 70), (179, 60, 220)) 
+      171 +    smoke_mask = cv2.morphologyEx(smoke_mask, cv2.MORPH_OPEN, 
+          +kernel)                                                       
+      172 +    smoke_mask = cv2.morphologyEx(smoke_mask, cv2.MORPH_CLOSE,
+      173 +                                  cv2.getStructuringElement(cv
+          +2.MORPH_ELLIPSE, (11, 11)))                                   
+      174 +    num_s, labels_s, stats_s, _ = cv2.connectedComponentsWithS
+          +tats(smoke_mask, 8)                                           
+      175 +    smoke_area = 0                                            
+      176 +    smoke_boxes: list[list[int]] = []                         
+      177 +    min_smoke = int(total * 0.03)                             
+      178 +    for i in range(1, num_s):                                 
+      179 +        area = stats_s[i, cv2.CC_STAT_AREA]                   
+      180 +        if area < min_smoke:                                  
+      181 +            continue                                          
+      182 +        x1 = int(stats_s[i, cv2.CC_STAT_LEFT])                
+      183 +        y1 = int(stats_s[i, cv2.CC_STAT_TOP])                 
+      184 +        bw = int(stats_s[i, cv2.CC_STAT_WIDTH])               
+      185 +        bh = int(stats_s[i, cv2.CC_STAT_HEIGHT])              
+      186 +        smoke_boxes.append([x1, y1, x1 + bw, y1 + bh])        
+      187 +        smoke_area += int(area)                               
+      188 +                                                              
+      189 +    smoke_frac = smoke_area / total                           
+      190 +    # Guard against uniform bright skies triggering smoke — re
+          +quire the masked                                              
+      191 +    # region to actually have mid-range brightness variability
+          +.                                                             
+      192 +    smoke_valid = smoke_frac > 0.10 and fire_frac < 0.08      
+      193 +    if smoke_valid:                                           
+      194 +        v_in = V[smoke_mask > 0]                              
+      195 +        if len(v_in) > 0 and (v_in.std() < 8 or v_in.mean() > 
+          +230):                                                         
+      196 +            # Flat / too-bright region — probably clear sky, n
+          +ot smoke.                                                     
+      197 +            smoke_valid = False                               
+      198 +                                                              
+      199      smoke = {
+      151 -        "detected": smoke_frac > 0.25 and fire_frac < 0.05,   
+      152 -        "area_frac": round(smoke_frac, 4),                    
+      200 +        "detected": smoke_valid,                              
+      201 +        "area_frac": round(float(smoke_frac), 4),             
+      202 +        "boxes": smoke_boxes[:4],                             
+      203      }
+      204      return fire, smoke
+      205  
+      206  
+      157 -# ── YOLO inference ──────────────────────────────────────────
+          -─────────────────                                             
+      207 +# ── YOLO inference with SAR-tuned filters ───────────────────
+          +─────────────────                                             
+      208  
+      209  def run_yolo(rgb: np.ndarray) -> tuple[list[dict], list[dict]]
+           :
+      210      model = get_model()
+      161 -    res = model.predict(rgb, verbose=False, conf=0.25, iou=0.4
+          -5, imgsz=416)[0]                                              
+      211 +    h, w = rgb.shape[:2]                                      
+      212 +    total = float(h * w)                                      
+      213 +    res = model.predict(rgb, verbose=False, conf=0.25, iou=0.4
+          +5, imgsz=640)[0]                                              
+      214      persons: list[dict] = []
+      215      others: list[dict] = []
+      216      if res.boxes is None:
+      217          return persons, others
+      218 +                                                              
+      219      for box in res.boxes:
+      220          cls_id = int(box.cls.item())
+      221          if cls_id not in RELEVANT_COCO:
+      222              continue
+      223          label = RELEVANT_COCO[cls_id]
+      224 +        conf = float(box.conf.item())                         
+      225          x1, y1, x2, y2 = [float(v) for v in box.xyxy[0].tolist
+           ()]
+      226 +        bw, bh = max(1.0, x2 - x1), max(1.0, y2 - y1)         
+      227 +        area_frac = (bw * bh) / total                         
+      228 +        aspect = bh / bw                                      
+      229 +                                                              
+      230          entry = {
+      231              "box": [int(x1), int(y1), int(x2), int(y2)],
+      174 -            "conf": round(float(box.conf.item()), 3),         
+      232 +            "conf": round(conf, 3),                           
+      233              "class": label,
+      234 +            "area_frac": round(area_frac, 4),                 
+      235 +            "aspect": round(aspect, 2),                       
+      236          }
+      177 -        (persons if label in VICTIM_CLASSES else others).appen
+          -d(entry)                                                      
+      237 +                                                              
+      238 +        if label in VICTIM_CLASSES:                           
+      239 +            # Reject tiny blips, UI thumbnails, and clearly no
+          +n-person aspect.                                              
+      240 +            if conf < MIN_PERSON_CONF: continue               
+      241 +            if area_frac < MIN_PERSON_AREA_FRAC: continue     
+      242 +            if aspect < MIN_PERSON_ASPECT or aspect > MAX_PERS
+          +ON_ASPECT: continue                                           
+      243 +            persons.append(entry)                             
+      244 +        else:                                                 
+      245 +            if conf < 0.35 or area_frac < 0.002:              
+      246 +                continue                                      
+      247 +            others.append(entry)                              
+      248 +                                                              
+      249      return persons, others
+      250  
+      251  
+     ...
+      253  
+      254  class IngestRequest(BaseModel):
+      255      frame_id: int
+      185 -    image: str                           # base64 or data URL 
+      256 +    image: str                                                
+      257      ts: float | None = None
+      258      gps: dict | None = None
+      259      eeg_flagged: bool = False
+     ...
+      309      record = FrameRecord(
+      310          ts=req.ts or time.time() * 1000,
+      311          frame_id=req.frame_id,
+      312 +        width=rgb.shape[1],                                   
+      313 +        height=rgb.shape[0],                                  
+      314          persons=persons,
+      315          other_objects=others,
+      316          fire=fire,
+     ...
+      325          "ok": True,
+      326          "frame_id": record.frame_id,
+      327          "persons_count": len(persons),
+      328 +        "vehicles_count": sum(1 for o in others if o["class"] 
+          +in ("car", "truck", "bus", "motorcycle", "bicycle")),         
+      329          "fire": fire["detected"],
+      330 +        "fire_area": fire["area_frac"],                       
+      331          "smoke": smoke["detected"],
+      332 +        "smoke_area": smoke["area_frac"],                     
+      333          "session_size": len(session.frames),
+      334      }
+      335  
+     ...
+      337  @app.post("/eeg-hit")
+      338  def eeg_hit(hit: EEGHit):
+      339      session.eeg_hits.append(hit.model_dump())
+      264 -    # Back-annotate the matching frame if present.            
+      340      for f in session.frames[-200:]:
+      341          if f.frame_id == hit.frame_id:
+      342              f.eeg_flagged = True
+     ...
+      374  # ── Insights aggregation ────────────────────────────────────
+           ─────────────────
+      375  
+      376  def _gps_key(gps: dict | None, precision: float = 2e-5) -> str
+            | None:
+      302 -    """Quantize GPS to ~2 m buckets for clustering."""        
+      377      if not gps or gps.get("lat") is None or gps.get("lon") is 
+           None:
+      378          return None
+      379      lat = round(gps["lat"] / precision) * precision
+     ...
+      381      return f"{lat:.6f},{lon:.6f}"
+      382  
+      383  
+      310 -def _box_center(box: list[int]) -> tuple[float, float]:       
+      311 -    x1, y1, x2, y2 = box                                      
+      312 -    return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)                 
+      384 +def _haversine_m(a: dict, b: dict) -> float:                  
+      385 +    import math                                               
+      386 +    R = 6371000.0                                             
+      387 +    lat1 = math.radians(a["lat"]); lat2 = math.radians(b["lat"
+          +])                                                            
+      388 +    dlat = lat2 - lat1                                        
+      389 +    dlon = math.radians(b["lon"] - a["lon"])                  
+      390 +    s = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) 
+          +* math.sin(dlon/2)**2                                         
+      391 +    return 2 * R * math.asin(min(1.0, s**0.5))                
+      392  
+      393  
+      394  def _box_iou(a: list[int], b: list[int]) -> float:
+     ...
+      404  
+      405  
+      406  def _cluster_victims(frames: list[FrameRecord]) -> list[dict]:
+      328 -    """                                                       
+      329 -    Deduplicate person detections into victim clusters.       
+      330 -                                                              
+      331 -    Strategy:                                                 
+      332 -      1. Group by quantized GPS bucket when available.        
+      333 -      2. Within a bucket (or globally if no GPS), link consecu
+          -tive detections                                               
+      334 -         via temporal proximity + box IoU continuity to form t
+          -racks.                                                        
+      335 -      3. Rank victim priority by max confidence * (1 + 0.5 * e
+          -eg_support).                                                  
+      336 -    """                                                       
+      337 -    # Flatten person detections with frame context.           
+      407      items: list[dict] = []
+      408      for f in frames:
+      409          for p in f.persons:
+     ...
+      412                  "frame_id": f.frame_id,
+      413                  "box": p["box"],
+      414                  "conf": p["conf"],
+      415 +                "area_frac": p.get("area_frac", 0),           
+      416                  "gps_key": _gps_key(f.gps),
+      417                  "gps": f.gps,
+      418                  "eeg_flagged": f.eeg_flagged,
+      419                  "eeg_amplitude": f.eeg_amplitude,
+      420              })
+      351 -                                                              
+      421      if not items:
+      422          return []
+      423  
+      355 -    # Sort chronologically, cluster by gps_key then temporal-I
+          -oU track.                                                     
+      424      items.sort(key=lambda it: it["ts"])
+      425      buckets: dict[str, list[dict]] = defaultdict(list)
+      426      for it in items:
+      427          buckets[it["gps_key"] or "_none"].append(it)
+      428  
+      429      clusters: list[dict] = []
+      362 -    for key, bucket in buckets.items():                       
+      430 +    for _, bucket in buckets.items():                         
+      431          tracks: list[list[dict]] = []
+      432          for it in bucket:
+      433              attached = False
+      434              for track in tracks:
+      435                  last = track[-1]
+      368 -                dt = (it["ts"] - last["ts"]) / 1000.0 if it["t
+          -s"] > 1e10 else it["ts"] - last["ts"]                         
+      369 -                if dt < 2.0 and _box_iou(it["box"], last["box"
+          -]) > 0.2:                                                     
+      436 +                dt_ms = it["ts"] - last["ts"]                 
+      437 +                dt = dt_ms / 1000.0 if dt_ms > 1e4 else dt_ms 
+      438 +                if dt < 2.5 and _box_iou(it["box"], last["box"
+          +]) > 0.2:                                                     
+      439                      track.append(it)
+      440                      attached = True
+      441                      break
+     ...
+      447              eeg_support = sum(1 for t in track if t["eeg_flagg
+           ed"])
+      448              max_conf = max(confs)
+      449              avg_conf = sum(confs) / len(confs)
+      381 -            priority = min(1.0, max_conf * (1 + 0.5 * min(eeg_
+          -support, 3) / 3))                                             
+      450 +            priority = min(1.0, (0.4 + 0.6 * max_conf) * (1 + 
+          +0.4 * min(eeg_support, 3) / 3))                               
+      451 +            avg_area = sum(t["area_frac"] for t in track) / le
+          +n(track)                                                      
+      452              first = track[0]; last = track[-1]
+      453              clusters.append({
+      454                  "victim_id": f"V{len(clusters)+1:03d}",
+     ...
+      459                  "last_frame": last["frame_id"],
+      460                  "max_confidence": round(max_conf, 3),
+      461                  "avg_confidence": round(avg_conf, 3),
+      462 +                "avg_area_frac": round(avg_area, 4),          
+      463                  "eeg_corroborations": eeg_support,
+      464                  "gps": first["gps"],
+      465                  "priority": round(priority, 3),
+     ...
+      470  
+      471  
+      472  def _fire_events(frames: list[FrameRecord]) -> list[dict]:
+      402 -    """Merge contiguous fire/smoke frames into events."""     
+      473      events: list[dict] = []
+      474      current: dict | None = None
+      475      for f in frames:
+     ...
+      477          if hot:
+      478              kind = "fire" if f.fire["detected"] else "smoke"
+      479              severity = f.fire["area_frac"] if f.fire["detected
+           "] else f.smoke["area_frac"]
+      410 -            if current and current["kind"] == kind and (f.ts -
+          - current["last_ts"]) < 3000:                                  
+      480 +            gap = (f.ts - current["last_ts"]) if current else 
+          +0                                                             
+      481 +            if current and current["kind"] == kind and gap < 3
+          +000:                                                          
+      482                  current["last_ts"] = f.ts
+      483                  current["last_frame"] = f.frame_id
+      484                  current["max_severity"] = max(current["max_sev
+           erity"], severity)
+     ...
+      498                      "frame_count": 1,
+      499                      "gps": f.gps,
+      500                  }
+      430 -        else:                                                 
+      431 -            if current:                                       
+      432 -                events.append(current)                        
+      433 -                current = None                                
+      501      if current:
+      502          events.append(current)
+      503      for ev in events:
+      504          ev["max_severity"] = round(ev["max_severity"], 4)
+      505 +        # Duration estimate from frame count (ingest runs ~2 H
+          +z)                                                            
+      506 +        ev["duration_s"] = round((ev["last_ts"] - ev["first_ts
+          +"]) / 1000.0                                                  
+      507 +                                  if ev["last_ts"] > 1e10 else
+          + ev["last_ts"] - ev["first_ts"], 1)                           
+      508      return events
+      509  
+      510  
+      441 -def _timeline(victims: list[dict], risks: list[dict], eeg_hits
+          -: list[dict]) -> list[dict]:                                  
+      442 -    events: list[dict] = []                                   
+      511 +def _timeline(victims, risks, eeg_hits):                      
+      512 +    events = []                                               
+      513      for v in victims:
+      514          events.append({
+      515              "t": v["first_seen_ts"],
+      516              "type": "victim_detected",
+      447 -            "label": f"{v['victim_id']} detected (conf {v['max
+          -_confidence']:.2f})",                                         
+      517 +            "label": f"{v['victim_id']} detected (conf {v['max
+          +_confidence']:.2f}, {v['detections']} hits)",                 
+      518              "priority": v["priority"],
+      519              "gps": v["gps"],
+      520          })
+     ...
+      522          events.append({
+      523              "t": r["first_ts"],
+      524              "type": f"risk_{r['kind']}",
+      455 -            "label": f"{r['kind'].upper()} detected — severity
+          - {r['max_severity']:.3f}",                                    
+      456 -            "priority": min(1.0, r["max_severity"] * 20),     
+      525 +            "label": f"{r['kind'].upper()} — severity {r['max_
+          +severity']*100:.1f}% across {r['frame_count']} frames",       
+      526 +            "priority": min(1.0, r["max_severity"] * 12),     
+      527              "gps": r.get("gps"),
+      528          })
+      529      for h in eeg_hits:
+     ...
+      538      return events
+      539  
+      540  
+      471 -def _heatmap(frames: list[FrameRecord]) -> list[dict]:        
+      541 +def _heatmap(frames):                                         
+      542      counts: dict[str, dict] = {}
+      543      for f in frames:
+      544          key = _gps_key(f.gps)
+      545          if not key:
+      546              continue
+      477 -        c = counts.setdefault(key, {"gps": f.gps, "persons": 0
+          -, "fire": 0, "smoke": 0, "frames": 0})                        
+      547 +        c = counts.setdefault(key, {                          
+      548 +            "gps": f.gps, "persons": 0, "fire": 0, "smoke": 0,
+          + "frames": 0,                                                 
+      549 +        })                                                    
+      550          c["frames"] += 1
+      551          c["persons"] += len(f.persons)
+      480 -        c["fire"] += int(f.fire["detected"])                  
+      481 -        c["smoke"] += int(f.smoke["detected"])                
+      552 +        c["fire"]   += int(f.fire["detected"])                
+      553 +        c["smoke"]  += int(f.smoke["detected"])               
+      554      return list(counts.values())
+      555  
+      556  
+      557 +def _flight_stats(frames: list[FrameRecord], victims: list[dic
+          +t], risks: list[dict]):                                       
+      558 +    if not frames:                                            
+      559 +        return {}                                             
+      560 +    total = len(frames)                                       
+      561 +    person_frames   = sum(1 for f in frames if f.persons)     
+      562 +    fire_frames     = sum(1 for f in frames if f.fire["detecte
+          +d"])                                                          
+      563 +    smoke_frames    = sum(1 for f in frames if f.smoke["detect
+          +ed"])                                                         
+      564 +    vehicle_frames  = sum(1 for f in frames if any(o["class"] 
+          +in ("car","truck","bus","motorcycle","bicycle") for o in f.oth
+          +er_objects))                                                  
+      565 +                                                              
+      566 +    all_persons = [p for f in frames for p in f.persons]      
+      567 +    avg_conf = (sum(p["conf"] for p in all_persons) / len(all_
+          +persons)) if all_persons else 0.0                             
+      568 +    peak = max((len(f.persons) for f in frames), default=0)   
+      569 +    avg_per_frame = len(all_persons) / total                  
+      570 +                                                              
+      571 +    ts_first = frames[0].ts                                   
+      572 +    ts_last  = frames[-1].ts                                  
+      573 +    duration_s = (ts_last - ts_first) / 1000.0 if ts_last > 1e
+          +10 else (ts_last - ts_first)                                  
+      574 +    duration_s = max(0.1, duration_s)                         
+      575 +                                                              
+      576 +    # Coverage area via GPS bbox                              
+      577 +    gpss = [f.gps for f in frames if f.gps and f.gps.get("lat"
+          +) is not None]                                                
+      578 +    coverage_m = 0.0                                          
+      579 +    bbox = None                                               
+      580 +    if len(gpss) >= 2:                                        
+      581 +        lats = [g["lat"] for g in gpss]; lons = [g["lon"] for 
+          +g in gpss]                                                    
+      582 +        bbox = {"min_lat": min(lats), "max_lat": max(lats),   
+      583 +                "min_lon": min(lons), "max_lon": max(lons)}   
+      584 +        coverage_m = _haversine_m({"lat": bbox["min_lat"], "lo
+          +n": bbox["min_lon"]},                                         
+      585 +                                   {"lat": bbox["max_lat"], "l
+          +on": bbox["max_lon"]})                                        
+      586 +                                                              
+      587 +    time_since_last_victim = None                             
+      588 +    if victims:                                               
+      589 +        last_ts = max(v["last_seen_ts"] for v in victims)     
+      590 +        now_ts = frames[-1].ts                                
+      591 +        dt = (now_ts - last_ts) / 1000.0 if now_ts > 1e10 else
+          + (now_ts - last_ts)                                           
+      592 +        time_since_last_victim = round(max(0.0, dt), 1)       
+      593 +                                                              
+      594 +    critical = sum(1 for v in victims if v["priority"] >= 0.8)
+      595 +    high     = sum(1 for v in victims if 0.5 <= v["priority"] 
+          +< 0.8)                                                        
+      596 +                                                              
+      597 +    return {                                                  
+      598 +        "total_frames": total,                                
+      599 +        "duration_s": round(duration_s, 1),                   
+      600 +        "person_frames": person_frames,                       
+      601 +        "vehicle_frames": vehicle_frames,                     
+      602 +        "fire_frames": fire_frames,                           
+      603 +        "smoke_frames": smoke_frames,                         
+      604 +        "victims_count": len(victims),                        
+      605 +        "critical_victims": critical,                         
+      606 +        "high_priority_victims": high,                        
+      607 +        "eeg_corroborated_victims": sum(1 for v in victims if 
+          +v["eeg_corroborations"] > 0),                                 
+      608 +        "fire_events": len([r for r in risks if r["kind"] == "
+          +fire"]),                                                      
+      609 +        "smoke_events": len([r for r in risks if r["kind"] == 
+          +"smoke"]),                                                    
+      610 +        "avg_confidence": round(avg_conf, 3),                 
+      611 +        "peak_simultaneous_persons": peak,                    
+      612 +        "avg_persons_per_frame": round(avg_per_frame, 2),     
+      613 +        "person_detection_rate": round(person_frames / total, 
+          +3),                                                           
+      614 +        "fire_coverage_pct": round(100 * fire_frames / total, 
+          +1),                                                           
+      615 +        "smoke_coverage_pct": round(100 * smoke_frames / total
+          +, 1),                                                         
+      616 +        "detections_per_min": round(len(all_persons) / (durati
+          +on_s / 60.0), 1) if duration_s > 0 else 0,                    
+      617 +        "gps_bbox": bbox,                                     
+      618 +        "coverage_diagonal_m": round(coverage_m, 1),          
+      619 +        "time_since_last_victim_s": time_since_last_victim,   
+      620 +    }                                                         
+      621 +                                                              
+      622 +                                                              
+      623  @app.get("/insights")
+      624  def insights():
+      625      frames = session.frames
+     ...
+      627      risks = _fire_events(frames)
+      628      timeline = _timeline(victims, risks, session.eeg_hits)
+      629      heatmap = _heatmap(frames)
+      630 +    stats = _flight_stats(frames, victims, risks)             
+      631  
+      493 -    total_frames = len(frames)                                
+      494 -    person_frames = sum(1 for f in frames if f.persons)       
+      495 -    fire_frames = sum(1 for f in frames if f.fire["detected"])
+      496 -    smoke_frames = sum(1 for f in frames if f.smoke["detected"
+          -])                                                            
+      497 -    eeg_corroborated = sum(1 for v in victims if v["eeg_corrob
+          -orations"] > 0)                                               
+      498 -                                                              
+      499 -    duration_s = 0.0                                          
+      632 +    lines: list[str] = []                                     
+      633      if frames:
+      501 -        ts_first = frames[0].ts                               
+      502 -        ts_last = frames[-1].ts                               
+      503 -        duration_s = (ts_last - ts_first) / 1000.0 if ts_last 
+          -> 1e10 else (ts_last - ts_first)                              
+      504 -        duration_s = max(0.0, duration_s)                     
+      634 +        lines.append(                                         
+      635 +            f"{stats['victims_count']} victim(s) across {stats
+          +['total_frames']} frames in "                                 
+      636 +            f"{stats['duration_s']:.0f}s"                     
+      637 +            + (f" — {stats['critical_victims']} CRITICAL, {sta
+          +ts['high_priority_victims']} HIGH." if stats['victims_count'] 
+          +else ".")                                                     
+      638 +        )                                                     
+      639 +        if stats["eeg_corroborated_victims"]:                 
+      640 +            lines.append(f"{stats['eeg_corroborated_victims']}
+          + corroborated by firefighter P300.")                          
+      641 +        if stats["fire_events"] or stats["smoke_events"]:     
+      642 +            lines.append(                                     
+      643 +                f"{stats['fire_events']} fire event(s) ({stats
+          +['fire_coverage_pct']}% of flight), "                         
+      644 +                f"{stats['smoke_events']} smoke event(s) ({sta
+          +ts['smoke_coverage_pct']}% of flight)."                       
+      645 +            )                                                 
+      646 +        if stats["peak_simultaneous_persons"]:                
+      647 +            lines.append(                                     
+      648 +                f"Peak {stats['peak_simultaneous_persons']} si
+          +multaneous persons, "                                         
+      649 +                f"avg confidence {stats['avg_confidence']*100:
+          +.0f}%."                                                       
+      650 +            )                                                 
+      651 +        if stats["coverage_diagonal_m"]:                      
+      652 +            lines.append(f"Coverage area: {stats['coverage_dia
+          +gonal_m']:.0f} m diagonal.")                                  
+      653 +        if stats["time_since_last_victim_s"] is not None:     
+      654 +            lines.append(f"Last victim seen {stats['time_since
+          +_last_victim_s']:.0f}s ago.")                                 
+      655 +    else:                                                     
+      656 +        lines.append("Awaiting drone feed…")                  
+      657  
+      506 -    # Firefighter-ready summary text (structured so the UI can
+          - format it).                                                  
+      507 -    summary_lines = [                                         
+      508 -        f"{len(victims)} victim cluster(s) detected across {to
+          -tal_frames} frames.",                                         
+      509 -        f"{eeg_corroborated} corroborated by firefighter P300 
+          -response.",                                                   
+      510 -        f"{len([r for r in risks if r['kind'] == 'fire'])} fir
+          -e event(s), "                                                 
+      511 -        f"{len([r for r in risks if r['kind'] == 'smoke'])} sm
+          -oke event(s).",                                               
+      512 -    ]                                                         
+      658 +    summary = {**stats, "lines": lines}                       
+      659  
+      660      return {
+      515 -        "summary": {                                          
+      516 -            "total_frames": total_frames,                     
+      517 -            "duration_s": round(duration_s, 1),               
+      518 -            "person_frames": person_frames,                   
+      519 -            "fire_frames": fire_frames,                       
+      520 -            "smoke_frames": smoke_frames,                     
+      521 -            "victims_count": len(victims),                    
+      522 -            "eeg_corroborated_victims": eeg_corroborated,     
+      523 -            "fire_events": len([r for r in risks if r["kind"] 
+          -== "fire"]),                                                  
+      524 -            "smoke_events": len([r for r in risks if r["kind"]
+          - == "smoke"]),                                                
+      525 -            "lines": summary_lines,                           
+      526 -        },                                                    
+      661 +        "summary": summary,                                   
+      662          "victims": victims,
+      663          "risks": risks,
+      664          "timeline": timeline,
+
+⏺ Now updating the Summary UI to display all the new stats, and restarting
+  services.
+
+⏺ Update(insights.js)
+  ⎿  Added 18 lines, removed 7 lines
+      28  }
+      29  
+      30  function renderSummary(container, s) {
+      31 +  const v = (x, d = 0) => (x == null ? '—' : (typeof x === 'num
+         +ber' ? x.toFixed(d) : x));                                     
+      32 +  const tsl = s.time_since_last_victim_s;                      
+      33    container.innerHTML = `
+      34      <div class="ins-metrics">
+      33 -      <div><span>${s.victims_count}</span><label>Victims</label
+         -></div>                                                        
+      34 -      <div><span>${s.eeg_corroborated_victims}</span><label>EEG
+         --verified</label></div>                                        
+      35 -      <div><span>${s.fire_events}</span><label>Fire</label></di
+         -v>                                                             
+      36 -      <div><span>${s.smoke_events}</span><label>Smoke</label></
+         -div>                                                           
+      37 -      <div><span>${s.total_frames}</span><label>Frames</label><
+         -/div>                                                          
+      38 -      <div><span>${s.duration_s.toFixed(0)}s</span><label>Durat
+         -ion</label></div>                                              
+      35 +      <div><span>${v(s.victims_count)}</span><label>Victims</la
+         +bel></div>                                                     
+      36 +      <div><span>${v(s.critical_victims)}</span><label>Critical
+         +</label></div>                                                 
+      37 +      <div><span>${v(s.eeg_corroborated_victims)}</span><label>
+         +EEG-verified</label></div>                                     
+      38 +      <div><span>${v(s.peak_simultaneous_persons)}</span><label
+         +>Peak</label></div>                                            
+      39 +      <div><span>${v(s.fire_events)}</span><label>Fire evt</lab
+         +el></div>                                                      
+      40 +      <div><span>${v(s.smoke_events)}</span><label>Smoke evt</l
+         +abel></div>                                                    
+      41 +      <div><span>${v(s.fire_coverage_pct, 1)}%</span><label>Fir
+         +e %</label></div>                                              
+      42 +      <div><span>${v(s.smoke_coverage_pct, 1)}%</span><label>Sm
+         +oke %</label></div>                                            
+      43 +      <div><span>${v(s.avg_confidence != null ? s.avg_confidenc
+         +e * 100 : null, 0)}%</span><label>Avg conf</label></div>       
+      44 +      <div><span>${v(s.detections_per_min, 1)}</span><label>Det
+         +/min</label></div>                                             
+      45 +      <div><span>${v(s.coverage_diagonal_m, 0)}m</span><label>C
+         +overage</label></div>                                          
+      46 +      <div><span>${tsl == null ? '—' : tsl.toFixed(0) + 's'}</s
+         +pan><label>Since last</label></div>                            
+      47 +      <div><span>${v(s.total_frames)}</span><label>Frames</labe
+         +l></div>                                                       
+      48 +      <div><span>${v(s.duration_s, 0)}s</span><label>Duration</
+         +label></div>                                                   
+      49 +      <div><span>${v(s.vehicle_frames)}</span><label>Vehicle fr
+         +.</label></div>                                                
+      50      </div>
+      51      <ul class="ins-lines">
+      41 -      ${s.lines.map(l => `<li>${l}</li>`).join('')}            
+      52 +      ${(s.lines || []).map(l => `<li>${l}</li>`).join('')}    
+      53      </ul>
+      54    `;
+      55  }
+
+⏺ Bash(kill $(pgrep -f "uvicorn detector.service") 2>/dev/null; kill $(pgrep -f
+      "node server.js") 2>/dev/null; sleep 1; python3 -m uvicorn
+      detector.service:app --port…)
+  ⎿  Running in the background (↓ to manage)
+
+⏺ Bash(curl -s http://127.0.0.1:8000/health && echo && curl -s -o /dev/null -w
+      "node=%{http_code}\n" http://localhost:3000/)
+  ⎿  Error: Exit code 7
+
+⏺ Background command "Restart both services" completed (exit code 0)
+  ⎿  You've hit your limit · resets 3am (America/Los_Angeles)
+     /upgrade to increase your usage limit.
+
+✻ Worked for 4m 24s
+
+❯ /rate-limit-options                                                           
+  ⎿  Login interrupted
+
+❯ /exit                                                                         
+  ⎿  Bye!
+
+❯ /export                                                                       
+  ⎿  Conversation copied to clipboard

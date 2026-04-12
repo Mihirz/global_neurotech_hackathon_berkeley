@@ -413,7 +413,7 @@ function renderCV(det) {
       ${cv.thermalSignature ? `<div class="cv-row"><span class="cv-key">Thermal</span><span class="cv-val" style="font-size:10px">${cv.thermalSignature}</span></div>` : ''}
       ${tags ? `<div class="cv-objects">${tags}</div>` : ''}
       ${cv.notes ? `<div class="cv-notes">${cv.notes}</div>` : ''}
-      ${cv.demo ? `<div style="margin-top:6px;font-family:var(--mono);font-size:9px;color:rgba(255,140,0,0.5)">DEMO — add ANTHROPIC_API_KEY to .env for real analysis</div>` : ''}
+      ${cv.demo ? `<div style="margin-top:6px;font-family:var(--mono);font-size:9px;color:rgba(255,140,0,0.5)">DEMO - add OPENAI_API_KEY or ANTHROPIC_API_KEY to .env for real analysis</div>` : ''}
     </div>
     <div class="analyze-btn-row" style="margin-top:8px">
       <button class="btn-sm" onclick="analyzeCurrentFrame()">Re-analyze</button>

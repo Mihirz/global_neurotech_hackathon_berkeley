@@ -42,14 +42,15 @@ cp .env.example .env
 Edit `.env`:
 
 ```env
-NEUROSITY_EMAIL=your@email.com
-NEUROSITY_PASSWORD=yourpassword
-NEUROSITY_DEVICE_ID=your-device-id          # found in Neurosity Console
+EMOTIV_CLIENT_ID=your-client-id
+EMOTIV_CLIENT_SECRET=your-client-secret
+OPENAI_API_KEY=your-openai-api-key
+ANTHROPIC_API_KEY=your-anthropic-api-key        # optional fallback/provider
+CV_ANALYSIS_PROVIDER=auto                       # auto|openai|anthropic
 DRONE_STREAM_URL=http://192.168.1.1:8080/video  # leave blank for demo mode
 ```
 
-**Finding your device ID:** Log into [console.neurosity.co](https://console.neurosity.co),
-go to Devices → your Crown → copy the Device ID from the URL or device details.
+OpenAI is used first when `OPENAI_API_KEY` is set. Anthropic remains available as a fallback or can be forced with `CV_ANALYSIS_PROVIDER=anthropic`.
 
 ### 3. Run
 
@@ -63,8 +64,8 @@ Open **http://localhost:3000** in Chrome or Edge.
 
 ## Demo Mode
 
-If no Neurosity credentials are set, the app runs in **demo mode**:
-- EEG is synthetically generated at 256Hz
+If no Emotiv credentials are set, the app runs in **demo mode**:
+- EEG is synthetically generated at 128Hz
 - P300 deflections (~6µV) are injected ~350ms after "person" frames
 - Thermal-style drone frames are generated with simulated person heat signatures
 

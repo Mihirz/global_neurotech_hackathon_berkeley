@@ -27,6 +27,89 @@ let connectedClients = new Set();
 let lastCrownStatus  = null;
 let cortex           = null;
 
+const CV_PROMPT = `Firefighting SAR drone frame. Respond ONLY with valid JSON:
+{"personDetected":boolean,"confidence":number,"objects":[],"framePosition":"top-left|top-center|top-right|center-left|center|center-right|bottom-left|bottom-center|bottom-right","estimatedCount":number,"thermalSignature":"string","notes":"string"}`;
+
+function getCvProvider() {
+  const requested = (process.env.CV_ANALYSIS_PROVIDER || 'auto').toLowerCase();
+  if (requested === 'openai' && process.env.OPENAI_API_KEY) return 'openai';
+  if (requested === 'anthropic' && process.env.ANTHROPIC_API_KEY) return 'anthropic';
+  if (process.env.OPENAI_API_KEY) return 'openai';
+  if (process.env.ANTHROPIC_API_KEY) return 'anthropic';
+  return null;
+}
+
+function getConfigPayload() {
+  const cvProvider = getCvProvider();
+  return {
+    droneUrl:         process.env.DRONE_STREAM_URL || null,
+    demo:             !process.env.EMOTIV_CLIENT_ID || process.env.EMOTIV_CLIENT_ID === 'your-client-id',
+    hasAnthropicKey:  !!process.env.ANTHROPIC_API_KEY,
+    hasOpenAIKey:     !!process.env.OPENAI_API_KEY,
+    hasAiAnalysisKey: !!cvProvider,
+    cvProvider:       cvProvider || 'demo',
+    headset:          'Emotiv Insight',
+  };
+}
+
+function parseCvJson(text) {
+  try {
+    return JSON.parse(text.replace(/```json|```/g, '').trim());
+  } catch {
+    return { personDetected: false, confidence: 0, notes: text, parseError: true };
+  }
+}
+
+async function analyzeWithAnthropic(base64) {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type':      'application/json',
+      'x-api-key':         process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model:      process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-20250514',
+      max_tokens: 400,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
+          { type: 'text',  text: CV_PROMPT },
+        ],
+      }],
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error?.message || `Anthropic error ${response.status}`);
+  return parseCvJson(data.content?.map(b => b.text || '').join('') || '{}');
+}
+
+async function analyzeWithOpenAI(imageDataUrl) {
+  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+      input: [{
+        role: 'user',
+        content: [
+          { type: 'input_text', text: CV_PROMPT },
+          { type: 'input_image', image_url: imageDataUrl },
+        ],
+      }],
+      max_output_tokens: 400,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error?.message || `OpenAI error ${response.status}`);
+  const text = data.output_text || data.output?.flatMap(item => item.content || []).map(part => part.text || '').join('') || '{}';
+  return parseCvJson(text);
+}
+
 // ── Broadcast helpers ─────────────────────────────────────────────────────────
 function broadcast(type, payload) {
   const msg = JSON.stringify({ type, payload, ts: Date.now() });
@@ -110,12 +193,7 @@ wss.on('connection', (ws) => {
 
   ws.send(JSON.stringify({
     type: 'init',
-    payload: {
-      droneUrl:        process.env.DRONE_STREAM_URL || null,
-      demo:            !process.env.EMOTIV_CLIENT_ID || process.env.EMOTIV_CLIENT_ID === 'your-client-id',
-      hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
-      headset:         'Emotiv Insight',
-    },
+    payload: getConfigPayload(),
   }));
 
   // Replay last known status so browser doesn't show stale white dot
@@ -126,12 +204,7 @@ wss.on('connection', (ws) => {
 
 // ── REST: Config ──────────────────────────────────────────────────────────────
 app.get('/api/config', (req, res) => {
-  res.json({
-    droneUrl:        process.env.DRONE_STREAM_URL || null,
-    demo:            !process.env.EMOTIV_CLIENT_ID || process.env.EMOTIV_CLIENT_ID === 'your-client-id',
-    hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
-    headset:         'Emotiv Insight',
-  });
+  res.json(getConfigPayload());
 });
 
 // ── REST: Training data ───────────────────────────────────────────────────────
@@ -203,13 +276,14 @@ app.post('/api/analyze/:frameId', async (req, res) => {
   const det = sessionDetections.find(d => d.frameId === frameId);
   if (!det) return res.status(404).json({ error: 'Detection not found' });
 
-  if (!process.env.ANTHROPIC_API_KEY) {
+  const provider = getCvProvider();
+  if (!provider) {
     const demo = {
       personDetected: true, confidence: 0.87,
       objects: ['person', 'possible victim'],
       framePosition: 'center-left', estimatedCount: 1,
       thermalSignature: 'high — consistent with living person',
-      notes: 'Demo mode — set ANTHROPIC_API_KEY in .env for real analysis',
+      notes: 'Demo mode — set OPENAI_API_KEY or ANTHROPIC_API_KEY in .env for real analysis',
       demo: true,
     };
     det.cv = demo;
@@ -218,33 +292,12 @@ app.post('/api/analyze/:frameId', async (req, res) => {
 
   try {
     const base64 = det.imgSrc.replace(/^data:image\/\w+;base64,/, '');
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type':      'application/json',
-        'x-api-key':         process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model:      'claude-sonnet-4-20250514',
-        max_tokens: 400,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
-            { type: 'text',  text: `Firefighting SAR drone frame. Respond ONLY with valid JSON:
-{"personDetected":boolean,"confidence":number,"objects":[],"framePosition":"top-left|top-center|top-right|center-left|center|center-right|bottom-left|bottom-center|bottom-right","estimatedCount":number,"thermalSignature":"string","notes":"string"}` },
-          ],
-        }],
-      }),
-    });
-    const data = await response.json();
-    const text = data.content?.map(b => b.text || '').join('') || '{}';
-    let cv;
-    try   { cv = JSON.parse(text.replace(/```json|```/g, '').trim()); }
-    catch { cv = { personDetected: false, confidence: 0, notes: text, parseError: true }; }
+    const cv = provider === 'openai'
+      ? await analyzeWithOpenAI(det.imgSrc)
+      : await analyzeWithAnthropic(base64);
+    cv.provider = provider;
     det.cv = cv;
-    console.log(`[CV] Frame ${frameId}: person=${cv.personDetected}, confidence=${cv.confidence}`);
+    console.log(`[CV] Frame ${frameId}: provider=${provider}, person=${cv.personDetected}, confidence=${cv.confidence}`);
     res.json(cv);
   } catch (err) {
     console.error('[CV] Failed:', err.message);

@@ -62,6 +62,10 @@ function connectWS() {
       setStatusDot('eeg-dot', online ? 'green' : (s.state === 'error' ? 'red' : 'amber'));
     }
 
+    if (msg.type === 'telemetry') {
+      updateTelemetryDisplay(msg.payload);
+    }
+
     if (msg.type === 'eeg_packet') {
       state.eegBuffer.push(msg.payload);
       updateEEGPlot(msg.payload);
@@ -210,14 +214,17 @@ function analyzeFrame(stimulus) {
   updateSignalBar(result.score);
 
   if (result.isP300) {
-    state.flaggedFrames.unshift({
+    const det = {
       ...stimulus,
       detectedAt: Date.now(),
       amplitude: result.amplitude,
-    });
+      gps: state.latestTelemetry || null,
+    };
+    state.flaggedFrames.unshift(det);
     if (state.flaggedFrames.length > 50) state.flaggedFrames.pop();
     renderFlaggedFrames();
     flashDetection();
+    persistDetection(det);
     log(`P300 detected — frame ${stimulus.frameId} (${result.amplitude}µV, score ${result.score.toFixed(2)})`);
   }
 }
@@ -532,3 +539,50 @@ document.addEventListener('DOMContentLoaded', () => {
   setMode('idle');
   log('NeuroRSVP initialized — calibrate before scanning');
 });
+
+// ─── Telemetry ────────────────────────────────────────────────────────────────
+state.latestTelemetry = null;
+
+function updateTelemetryDisplay(t) {
+  state.latestTelemetry = t;
+  const el = document.getElementById('telemetry-readout');
+  if (!el) return;
+  if (!t) { el.textContent = 'No GPS'; return; }
+  el.textContent = `${t.lat?.toFixed(6)}, ${t.lon?.toFixed(6)}  Alt:${(t.alt||0).toFixed(1)}m  Hdg:${(t.heading||0).toFixed(0)}°`;
+}
+
+window.submitManualGPS = function() {
+  const lat = parseFloat(document.getElementById('gps-lat').value);
+  const lon = parseFloat(document.getElementById('gps-lon').value);
+  const alt = parseFloat(document.getElementById('gps-alt').value) || 0;
+  const heading = parseFloat(document.getElementById('gps-heading').value) || 0;
+  if (isNaN(lat) || isNaN(lon)) { log('Invalid GPS — enter decimal degrees'); return; }
+  const t = { lat, lon, alt, heading, ts: Date.now(), manual: true };
+  updateTelemetryDisplay(t);
+  fetch('/api/telemetry', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(t),
+  });
+  log(`Manual GPS: ${lat.toFixed(6)}, ${lon.toFixed(6)} alt=${alt}m hdg=${heading}°`);
+};
+
+// ─── Persist detections to server ────────────────────────────────────────────
+async function persistDetection(frame) {
+  try {
+    await fetch('/api/detections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        frameId: frame.frameId,
+        ts: frame.ts,
+        imgSrc: frame.imgSrc,
+        amplitude: frame.amplitude,
+        score: frame.score,
+        gps: frame.gps || null,
+      }),
+    });
+  } catch (e) {
+    console.warn('Could not persist detection:', e);
+  }
+}

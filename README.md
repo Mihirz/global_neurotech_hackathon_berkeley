@@ -73,6 +73,58 @@ Demo mode is fully functional for testing the pipeline and UI.
 
 ---
 
+## EEG Salience Classification Demo
+
+The repo also includes a Python PRD prototype for EEG-based salience detection
+across the sorted image folders:
+
+- `images/humans in fire` -> `human_fire` target-critical
+- `images/items in fire` -> `item_fire` secondary target
+- `images/abnormal items` -> `normal` non-target baseline for this demo
+
+Install the Python dependencies:
+
+```bash
+pip install -r eeg_salience_requirements.txt
+```
+
+Run a fast headless smoke test:
+
+```bash
+python eeg_salience_demo.py --dry-run --trials 18 --calibration-trials 90
+```
+
+Run the stimulus display loop:
+
+```bash
+python eeg_salience_demo.py --display --trials 60 --calibration-trials 180
+```
+
+The script simulates 256Hz EEG by default, trains per-session P300 and
+three-class classifiers, extracts -200ms to +800ms epochs, scores the 300-600ms
+P300 window, and writes real-time JSONL events to
+`outputs/eeg_salience_events.jsonl`.
+
+Each event includes:
+
+```json
+{
+  "timestamp": 1770000000.0,
+  "image_id": "humans in fire 1",
+  "predicted_class": "human_fire",
+  "confidence": 0.91,
+  "p300_strength": 0.84,
+  "p300_detected": true
+}
+```
+
+The final session summary reports useful statistics by class, including event
+counts, accuracy, P300 detection rate, mean P300 strength, and mean confidence.
+The LSL/headset connection is intentionally isolated for now; replace
+`SyntheticEEGSource` with a source that exposes `get_epoch(...)` for real EEG.
+
+---
+
 ## Workflow
 
 ### Step 1: Calibrate

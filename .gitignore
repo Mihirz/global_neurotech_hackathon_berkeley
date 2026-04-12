@@ -1,3 +1,6 @@
 .env
 node_modules
 training_data.json
+outputs/
+__pycache__/
+*.py[cod]

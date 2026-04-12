@@ -1,7 +1,7 @@
 {
   "name": "neurorsvp-firefighter",
   "version": "1.0.0",
-  "description": "P300 RSVP BCI for drone-based human detection — firefighter use case",
+  "description": "N170/VPP RSVP BCI for drone-based human detection \u2014 Emotiv Insight + DJI Mini 2 SE",
   "main": "server.js",
   "type": "module",
   "scripts": {
@@ -9,7 +9,6 @@
     "dev": "node --watch server.js"
   },
   "dependencies": {
-    "@neurosity/sdk": "^7.0.1",
     "express": "^4.18.2",
     "ws": "^8.16.0",
     "dotenv": "^16.4.1"

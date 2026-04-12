@@ -6,6 +6,7 @@ import { createServer } from 'http';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { CortexClient } from './cortex.js';
+import { SyntheticEEGStream, generateTrainingDataset, datasetStats } from './eeg_synthetic.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app    = express();
@@ -25,7 +26,6 @@ let   latestTelemetry   = null;
 let connectedClients = new Set();
 let lastCrownStatus  = null;
 let cortex           = null;
-let simInterval      = null;
 
 // ── Broadcast helpers ─────────────────────────────────────────────────────────
 function broadcast(type, payload) {
@@ -76,55 +76,15 @@ async function connectInsight() {
 }
 
 // ── Simulated EEG (demo mode) ─────────────────────────────────────────────────
-// Mimics Insight format: 5ch, 128Hz, batches of 4 samples
-let simTime        = Date.now();
-let simFrameOnsets = [];
+let syntheticStream = null;
 
 function startSimulatedEEG() {
-  broadcastStatus({ state: 'demo', message: 'Simulated EEG — 128Hz · 5ch (Insight format)' });
-  const RATE       = 128;
-  const BATCH      = 4;
-  const PACKET_MS  = (BATCH / RATE) * 1000; // ~31.25ms
-
-  simInterval = setInterval(() => {
-    const packetStart = simTime;
-    simTime += PACKET_MS;
-    const data = [];
-
-    for (let i = 0; i < BATCH; i++) {
-      const t     = packetStart + (i / RATE) * 1000;
-      const noise = () => (Math.random() - 0.5) * 4;
-
-      // N170-like deflection: negative on T7(1) and T8(3), positive on Pz(2)
-      let n170 = 0, vpp = 0;
-      for (const onset of simFrameOnsets) {
-        const dt = t - onset;
-        if (dt >= 120 && dt <= 220) {
-          n170 = -5 * Math.exp(-Math.pow(dt - 170, 2) / (2 * 25 * 25)); // negative
-          vpp  =  3 * Math.exp(-Math.pow(dt - 180, 2) / (2 * 20 * 20)); // positive
-        }
-      }
-
-      // [AF3, T7, Pz, T8, AF4]
-      data.push([
-        noise(),           // AF3  — frontal, minimal N170
-        noise() + n170,    // T7   — left temporal, primary N170
-        noise() + vpp,     // Pz   — parietal midline, VPP
-        noise() + n170,    // T8   — right temporal, primary N170
-        noise(),           // AF4  — frontal, minimal N170
-      ]);
-    }
-
-    broadcast('eeg_packet', {
-      data,
-      startTime:  packetStart,
-      sampleRate: RATE,
-      channels:   ['AF3', 'T7', 'Pz', 'T8', 'AF4'],
-      simulated:  true,
-    });
-
-    simFrameOnsets = simFrameOnsets.filter(o => o > Date.now() - 3000);
-  }, PACKET_MS);
+  syntheticStream = new SyntheticEEGStream({
+    controllerActivity: 0.5,
+    onStatus: (msg) => broadcastStatus({ state: 'demo', message: msg }),
+    onPacket: (packet) => broadcast('eeg_packet', packet),
+  });
+  syntheticStream.start();
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -135,7 +95,8 @@ wss.on('connection', (ws) => {
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw);
-      if (msg.type === 'sim_frame_onset') simFrameOnsets.push(msg.ts);
+      if (msg.type === 'sim_frame_onset' && syntheticStream)
+        syntheticStream.notifyFrameOnset(msg.ts, msg.isFace ?? false);
       if (msg.type === 'ping') ws.send(JSON.stringify({ type: 'pong', ts: Date.now() }));
     } catch {}
   });
@@ -168,6 +129,30 @@ app.get('/api/config', (req, res) => {
     demo:            !process.env.EMOTIV_CLIENT_ID || process.env.EMOTIV_CLIENT_ID === 'your-client-id',
     hasAnthropicKey: !!process.env.ANTHROPIC_API_KEY,
     headset:         'Emotiv Insight',
+  });
+});
+
+// ── REST: Training data ───────────────────────────────────────────────────────
+// GET /api/training-data?n=200&controllerActivity=0.5
+// Returns a labeled dataset of synthetic N170/VPP epochs for classifier training.
+app.get('/api/training-data', (req, res) => {
+  const n                  = Math.min(parseInt(req.query.n || '200', 10), 1000);
+  const controllerActivity = parseFloat(req.query.controllerActivity || '0.5');
+  const keepArtifacted     = req.query.keepArtifacted === 'true';
+
+  const trials = generateTrainingDataset(n, { controllerActivity, keepArtifacted });
+  const stats  = datasetStats(trials);
+
+  res.json({
+    stats,
+    trials: trials.map(t => ({
+      label:        t.label,
+      isFace:       t.isFace,
+      isArtifacted: t.isArtifacted,
+      features:     t.features,
+      epochMatrix:  t.epoch.map(s => Array.from(s.ch)),  // [nSamples × 5]
+      epochTimes:   t.epoch.map(s => s.t),               // ms relative to onset
+    })),
   });
 });
 
@@ -278,7 +263,7 @@ server.listen(PORT, async () => {
 
 process.on('SIGINT', async () => {
   console.log('\n[Server] Shutting down...');
-  if (simInterval) clearInterval(simInterval);
-  if (cortex)      await cortex.disconnect();
+  if (syntheticStream) syntheticStream.stop();
+  if (cortex)          await cortex.disconnect();
   process.exit(0);
 });

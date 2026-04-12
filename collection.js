@@ -2,7 +2,8 @@ const PRE_MS = 200;
 const POST_MS = 800;
 const P300_START_MS = 300;
 const P300_END_MS = 600;
-const ARTIFACT_UV = 100;
+const ARTIFACT_WARN_UV = 100;
+const ARTIFACT_REJECT_UV = 5000;
 const BANDS = {
   delta: [1, 4],
   theta: [4, 8],
@@ -315,6 +316,9 @@ function analyzeTrial(trial, stimulusTs) {
     samples: result.samples,
     sampleRate: state.buffer.sampleRate,
     channelsUsed: result.channelsUsed,
+    signalQuality: epoch.quality || (result.rejected ? 'rejected' : 'unknown'),
+    qualityWarning: epoch.qualityWarning || '',
+    maxAbsUv: epoch.maxAbsUv || 0,
     bandFeatures,
     rejected: result.rejected,
     rejectReason: result.rejectReason,
@@ -342,24 +346,46 @@ function extractEpoch(stimulusTs) {
     ch: sample.ch.map((value, channel) => value - means[channel]),
   }));
 
+  const eegChannels = eegChannelIndexes(nChannels);
+  let maxAbs = 0;
   for (const sample of epoch) {
-    for (const value of sample.ch) {
-      if (Math.abs(value) > ARTIFACT_UV) {
-        return { rejected: true, rejectReason: `artifact > ${ARTIFACT_UV}uV`, samples: samples.length };
-      }
+    for (const channel of eegChannels) {
+      maxAbs = Math.max(maxAbs, Math.abs(sample.ch[channel] || 0));
     }
   }
 
-  return { rejected: false, epoch, samples: samples.length };
+  if (maxAbs > ARTIFACT_REJECT_UV) {
+    return { rejected: true, rejectReason: `artifact > ${ARTIFACT_REJECT_UV}uV`, samples: samples.length, maxAbsUv: round(maxAbs, 2) };
+  }
+
+  return {
+    rejected: false,
+    epoch,
+    samples: samples.length,
+    quality: maxAbs > ARTIFACT_WARN_UV ? 'noisy' : 'ok',
+    qualityWarning: maxAbs > ARTIFACT_WARN_UV ? `high amplitude ${round(maxAbs, 1)}uV` : '',
+    maxAbsUv: round(maxAbs, 2),
+  };
+}
+
+function eegChannelIndexes(nChannels) {
+  const names = state.buffer.channels || [];
+  const blocked = /aux|right aux|acc|gyro|ppg/i;
+  const fromNames = names
+    .map((name, idx) => ({ name: String(name || ''), idx }))
+    .filter(({ name, idx }) => idx < nChannels && !blocked.test(name))
+    .map(({ idx }) => idx);
+  if (fromNames.length) return fromNames;
+  return Array.from({ length: nChannels }, (_v, idx) => idx);
 }
 
 function p300Channels(nChannels) {
   const names = state.buffer.channels || [];
   const pz = names.findIndex(name => String(name).toLowerCase() === 'pz');
   if (pz >= 0) return [pz];
-  if (nChannels === 5) return [2];
+  if (nChannels === 5) return eegChannelIndexes(nChannels);
   if (nChannels >= 8) return [3, 4, 0, 7].filter(channel => channel < nChannels);
-  return [Math.max(0, Math.floor(nChannels / 2))];
+  return eegChannelIndexes(nChannels);
 }
 
 function scoreEpoch(extraction, threshold) {
@@ -376,6 +402,7 @@ function scoreEpoch(extraction, threshold) {
       latencyMs: null,
       auc: 0,
       channelsUsed: [],
+      quality: extraction.quality || 'rejected',
     };
   }
 
@@ -413,6 +440,7 @@ function scoreEpoch(extraction, threshold) {
     latencyMs: Math.round(series[peakIdx].t),
     auc: round(auc, 4),
     channelsUsed: channels.map(channel => state.buffer.channels[channel] || `ch${channel}`),
+    quality: extraction.quality || 'ok',
   };
 }
 
@@ -496,10 +524,11 @@ function renderEvent(event) {
   const row = document.createElement('div');
   row.className = 'event-row';
   const hitClass = event.p300Detected ? 'hit' : 'miss';
+  const statusText = event.rejected ? 'reject' : event.signalQuality === 'noisy' ? 'noisy' : `${event.p300AmplitudeUv}uV`;
   row.innerHTML = `
     <b>${LABELS[event.label]?.short || event.label}</b>
     <span>${event.imageId}</span>
-    <span class="${hitClass}">${event.rejected ? 'reject' : `${event.p300AmplitudeUv}uV`}</span>
+    <span class="${hitClass}">${statusText}</span>
   `;
   $('event-log').prepend(row);
   while ($('event-log').children.length > 14) $('event-log').lastChild.remove();
@@ -548,7 +577,8 @@ function updateProgress() {
 
 function appendWaveform(packet) {
   const pzIndex = (packet.channels || []).findIndex(name => String(name).toLowerCase() === 'pz');
-  const channel = pzIndex >= 0 ? pzIndex : Math.min(2, (packet.data[0]?.length || 1) - 1);
+  const eegChannels = packet.data[0] ? eegChannelIndexes(packet.data[0].length) : [0];
+  const channel = pzIndex >= 0 ? pzIndex : (eegChannels[0] ?? 0);
   for (const sample of packet.data) state.eegPlot.push(sample[channel] || 0);
   while (state.eegPlot.length > 360) state.eegPlot.shift();
   drawWaveform();
@@ -686,7 +716,8 @@ function downloadCsv() {
     'sessionId', 'trialIndex', 'stimulusTimestamp', 'collectedAt', 'imageId', 'fileName',
     'folder', 'label', 'predictedClass', 'isTarget', 'p300Detected', 'p300Score',
     'confidence', 'p300AmplitudeUv', 'meanAmplitudeUv', 'p300LatencyMs', 'auc',
-    'thresholdUv', 'samples', 'sampleRate', 'channelsUsed', 'rejected', 'rejectReason',
+    'thresholdUv', 'samples', 'sampleRate', 'channelsUsed', 'signalQuality', 'qualityWarning',
+    'maxAbsUv', 'rejected', 'rejectReason',
     ...bandCols,
   ];
   const lines = [cols.join(',')];

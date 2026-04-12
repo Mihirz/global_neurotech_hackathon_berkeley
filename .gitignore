@@ -3,6 +3,7 @@ node_modules
 training_data.json
 outputs/
 collection_data/
+runtime_logs/
 models/*.joblib
 __pycache__/
 *.py[cod]

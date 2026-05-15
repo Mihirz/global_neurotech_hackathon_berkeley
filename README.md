@@ -1,17 +1,13 @@
 # NeuroRSVP - Firefighter BCI
 
 NeuroRSVP is a hackathon prototype for firefighter drone review. The system
-uses a Muse 2 EEG headset as planned: we stream live EEG, align it to image
+uses a Muse 2 EEG headset: we stream live EEG, align it to image
 stimulus timestamps, preprocess the signal, extract P300-window features, compute
 delta/theta/alpha/beta/gamma bandpower, and save the synchronized image + EEG
 rows for review and later modeling.
 
-For the current demo build, the final UI salience decision is CV-led so the demo
-is stable in front of judges. The app still shows and records the actual Muse
-stream. The salience score follows the image/CV diagnosis and adds a small live
-Muse EEG influence plus a small random jitter term. This keeps the experience
-faithful to the original EEG workflow while avoiding unreliable single-trial
-training during a short hackathon run.
+The app shows and records the Muse stream. The salience score follows the image/CV diagnosis and adds a small live
+Muse EEG influence.
 
 ---
 

@@ -1,6 +1,6 @@
-# NeuroRSVP - Firefighter BCI
+# PyroSense - Firefighter BCI
 
-NeuroRSVP is a hackathon prototype for firefighter drone review. The system
+PyroSense is a prototype for firefighter drone review. The system
 uses a Muse 2 EEG headset: we stream live EEG, align it to image
 stimulus timestamps, preprocess the signal, extract P300-window features, compute
 delta/theta/alpha/beta/gamma bandpower, and save the synchronized image + EEG

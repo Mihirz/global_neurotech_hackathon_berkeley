@@ -36,7 +36,6 @@ The repository contains two connected demo surfaces:
    - Builds review summaries, important frame lists, risk events, and optional
      LLM after-action summaries.
 
-The key demo story is:
 
 > A firefighter watches fast fire-scene imagery while the app records live Muse
 > EEG. The system marks high-salience imagery, especially humans in fire, by

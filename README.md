@@ -1,4 +1,5 @@
 # PyroSense - Firefighter BCI
+>_Devpost: https://devpost.com/software/pyrosense_
 
 PyroSense is a prototype for firefighter drone review. The system
 uses a Muse 2 EEG headset: we stream live EEG, align it to image
@@ -597,28 +598,3 @@ job automatically.
 | `yolov8s.pt`, `yolov8n.pt` | Local YOLO model weights |
 
 ---
-
-## Known Limitations
-
-- Muse 2 does not have a true Pz electrode, so this is not a clinical P300
-  setup.
-- Single-trial P300 can be noisy; the app saves raw features but does not rely
-  on a trained EEG-only classifier for the live demo.
-- No rows are rejected; low-quality rows are marked with `signalQuality` and
-  `qualityWarning`.
-- The current live salience output is CV-led with a live Muse overlay, not a
-  fully validated brain-only detector.
-- The drone feed path depends on the feed format. `DRONE_STREAM_URL` can point
-  at a real feed, an ffmpeg MJPEG bridge, or be blank for simulated thermal
-  frames.
-
----
-
-## Bottom Line
-
-The repo demonstrates the full EEG workflow we planned: Muse 2 streaming,
-timestamp alignment, baseline-corrected epochs, P300-window extraction,
-bandpower features, synchronized image rows, and a firefighter-facing UI. For
-demo reliability, the visible salience verdict is CV-led and uses the live EEG
-stream as supporting signal rather than requiring a trained EEG classifier during
-the presentation.
